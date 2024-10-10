@@ -1,0 +1,21 @@
+{
+    "config": {
+        "abort": {
+            "already_configured": "Username already configured."
+        },
+        "step": {
+            "user": {
+                "description": "ONLY E48HP/E48GP models supported!\n\nProvide the same username/password as the KDK Ceiling Fan mobile app.\n\nEnsure that you have already registered your fans in the app before connecting.",
+                "data": {
+                    "username": "Username",
+                    "password": "Password"
+                }
+            }
+        },
+        "error": {
+            "auth": "Username/Password is wrong.",
+            "connection": "Unable to connect to the server.",
+            "unknown": "Unknown error occurred."
+        }
+    }
+}

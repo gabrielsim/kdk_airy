@@ -1,0 +1,12 @@
+{
+    "domain": "kdk_airy",
+    "name": "KDK Airy",
+    "codeowners": [
+      "@gabrielsim"
+    ],
+    "config_flow": true,
+    "documentation": "https://github.com/gabrielsim/<TOOD>",
+    "iot_class": "cloud_polling",
+    "issue_tracker": "https://github.com/gabrielsim/<TOOD>/issues",
+    "version": "1.0.0"
+  }
