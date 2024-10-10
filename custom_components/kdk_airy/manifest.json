@@ -5,8 +5,8 @@
       "@gabrielsim"
     ],
     "config_flow": true,
-    "documentation": "https://github.com/gabrielsim/<TOOD>",
+    "documentation": "https://github.com/gabrielsim/kdk_airy",
     "iot_class": "cloud_polling",
-    "issue_tracker": "https://github.com/gabrielsim/<TOOD>/issues",
+    "issue_tracker": "https://github.com/gabrielsim/kdk_airy/issues",
     "version": "1.0.0"
   }
