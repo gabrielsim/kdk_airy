@@ -195,4 +195,4 @@ class IntegrationBlueprintLight(CoordinatorEntity, LightEntity):
 
         self._attr_is_on = False
         self.async_write_ha_state()
-        await self.async_set_light_settings(KdkDeviceSettings(fan_power=False))
+        await self.async_set_light_settings(KdkDeviceSettings(light_power=False))
