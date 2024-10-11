@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+import asyncio
+from datetime import datetime, timedelta
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
@@ -37,9 +38,12 @@ class KdkAiryDataUpdateCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self):
         """Update data via library."""
         try:
+            start_time = datetime.now().timestamp()
             LOGGER.debug(f"Polling for updates from {len(self._devices)} fans")
-            return await self._api.get_statuses(devices=self._devices)
+            statuses = await self._api.get_statuses(devices=self._devices)
+            return statuses | {"polled_time": start_time}
         except AuthExpired as exception:
             raise ConfigEntryAuthFailed(exception) from exception
         except Exception as exception:
+            LOGGER.error(exception)
             raise UpdateFailed(exception) from exception

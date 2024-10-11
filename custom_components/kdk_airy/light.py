@@ -1,5 +1,6 @@
 """Light platform for integration_blueprint."""
 
+from datetime import datetime
 import math
 
 from homeassistant.components.light import (
@@ -76,6 +77,7 @@ class IntegrationBlueprintLight(CoordinatorEntity, LightEntity):
         self._appliance_id = appliance_id
         self._api = api
         self._attr_unique_id = f"{appliance_id}_light"
+        self._last_change = datetime(1970, 1, 1)
 
     @property
     def available(self):
@@ -122,6 +124,11 @@ class IntegrationBlueprintLight(CoordinatorEntity, LightEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
+
+        if self.coordinator.data["polled_time"] < self._last_change.timestamp():
+            LOGGER.warning("Coordinator data is stale, skipping")
+            return
+
         device_settings: KdkDeviceSettings = self.coordinator.data.get(
             self._appliance_id
         )
@@ -152,6 +159,8 @@ class IntegrationBlueprintLight(CoordinatorEntity, LightEntity):
         """Set light to the desired settings."""
 
         LOGGER.info(f"Set light settings: {settings}")
+
+        self._last_change = datetime.now()
 
         await self._api.change_settings(
             appliance_id=self._appliance_id,
