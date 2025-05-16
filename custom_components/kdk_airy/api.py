@@ -1,10 +1,14 @@
 """KDK API Package."""
 
 import asyncio
+import base64
 import contextlib
+import hashlib
+import html
+import re
+import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
-import re
 from typing import Literal, NamedTuple
 
 import aiohttp
@@ -202,6 +206,7 @@ class KdkApiClient:
     # Hard-coded values from the KDK Ceiling Fan app v1.1.0
     APP_KEY = "rZLwuRtU0nFb20Mh6LShL6uY3fZ5tBlarz4ONmdl"
     USER_AGENT = "CeilingFanKDK_prod_appStore/1.1.0 (iPhone; iOS 16.4.1; Scale/3.00)"
+    CLIENT_ID = "cBobGHXGfRxMKXYXvMYevGPhMhFKpjsv"
 
     def __init__(
         self,
@@ -226,25 +231,95 @@ class KdkApiClient:
         LOGGER.debug(f"Request took {round(duration, 1)}s")
 
     async def login(self):
-        "Login to server."
+        def __extract_form_values(html_string: str):
+            # Extract wresult value using regex
+            wresult_pattern = re.compile(r'name="wresult"\s+value="([^"]*)"')
+            wresult_match = wresult_pattern.search(html_string)
+            wresult_value = wresult_match.group(1) if wresult_match else None
 
-        LOGGER.debug("Logging in")
+            # Extract wctx value using regex
+            wctx_pattern = re.compile(r'name="wctx"\s+value="([^"]*)"')
+            wctx_match = wctx_pattern.search(html_string)
+            wctx_value = wctx_match.group(1) if wctx_match else None
 
-        async with self._session.post(
-            url="https://prod.mycfan.pgtls.net/v1/mycfan/auth/login",
+            # Unescape HTML entities in wctx (convert &#34; to " etc.)
+            if wctx_value:
+                wctx_value = html.unescape(wctx_value)
+
+            return {
+                "wresult": wresult_value,
+                "wctx": wctx_value,  # Original unescaped string
+            }
+
+        code_verifier = secrets.token_urlsafe(64)
+        state = secrets.token_urlsafe(64)
+        digest = hashlib.sha256(code_verifier.encode()).digest()
+        code_challenge = base64.urlsafe_b64encode(digest).decode().rstrip("=")
+
+        request_1 = await self._session.request(
+            method="GET",
+            url=f"https://authglb.digital.panasonic.com/authorize?client_id={KdkApiClient.CLIENT_ID}&state={state}&code_challenge={code_challenge}&scope=openid%20offline_access%20mycfan.control&code_challenge_method=S256&prompt=login&response_type=code&redirect_uri=com.panasonic.jp.airinfinity://authglb.digital.panasonic.com/ios/com.panasonic.jp.airinfinity/callback&audience=https://digital.panasonic.com/{KdkApiClient.CLIENT_ID}/api/v1/&auth0Client=eyJuYW1lIjoiQXV0aDAuc3dpZnQiLCJlbnYiOnsic3dpZnQiOiI1LngiLCJpT1MiOiIxOC40In0sInZlcnNpb24iOiIyLjMuMiJ9",
+            allow_redirects=False,
+        )
+
+        oauth_state = (
+            request_1.headers.get("location").split("login?state=")[1].split("&")[0]
+        )
+
+        request_2 = await self._session.request(
+            method="POST",
+            url="https://authglb.digital.panasonic.com/usernamepassword/login",
             json={
-                "type": 1,
-                "id": self._username,
-                "pass": self._password,
+                "client_id": KdkApiClient.CLIENT_ID,
+                "redirect_uri": "com.panasonic.jp.airinfinity://authglb.digital.panasonic.com/ios/com.panasonic.jp.airinfinity/callback?lang=en",
+                "tenant": "pdpauthglb-a1",
+                "response_type": "code",
+                "scope": "openid offline_access mycfan.control",
+                "audience": f"https://digital.panasonic.com/{KdkApiClient.CLIENT_ID}/api/v1/",
+                "state": oauth_state,
+                "_intstate": "deprecated",
+                "username": self._username,
+                "password": self._password,
+                "lang": "en",
+                "connection": "PanasonicID-Authentication",
             },
-            headers={"x-api-key": KdkApiClient.APP_KEY},
-        ) as response:
-            if response.status == 401:
-                raise InvalidAuth(await response.text())
-            response.raise_for_status()
-            data = await response.json()
-            self._token = data["token"]
+        )
+        request_2_form = __extract_form_values(await request_2.text())
 
+        request_3 = await self._session.request(
+            method="POST",
+            url="https://authglb.digital.panasonic.com/login/callback",
+            data={
+                "wa": "wsignin1.0",
+                "wresult": request_2_form["wresult"],
+                "wctx": request_2_form["wctx"],
+            },
+            allow_redirects=False,
+        )
+
+        request_4 = await self._session.request(
+            method="GET",
+            url=f"https://authglb.digital.panasonic.com{request_3.headers.get('location')}",
+            allow_redirects=False,
+        )
+
+        code = request_4.headers.get("location").split("code=")[1].split("&")[0]
+        oauth_state = request_4.headers.get("location").split("state=")[1]
+
+        request_5 = await self._session.request(
+            method="POST",
+            url="https://authglb.digital.panasonic.com/oauth/token",
+            json={
+                "grant_type": "authorization_code",
+                "code": code,
+                "code_verifier": code_verifier,
+                "client_id": KdkApiClient.CLIENT_ID,
+                "redirect_uri": "com.panasonic.jp.airinfinity://authglb.digital.panasonic.com/ios/com.panasonic.jp.airinfinity/callback",
+            },
+            allow_redirects=False,
+        )
+
+        self._token = (await request_5.json())["access_token"]
         LOGGER.debug("Logged in successfully")
 
     def get_auth_headers(self):
