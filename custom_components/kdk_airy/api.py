@@ -8,7 +8,7 @@ import html
 import re
 import secrets
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal, NamedTuple
 
 import aiohttp
@@ -42,6 +42,31 @@ class AuthExpired(KdkApiError):
 
 class InvalidAuth(KdkApiError):
     "Invalid username / password used."
+
+
+class RefreshTokenExpired(KdkApiError):
+    "When the refresh token has expired and full re-authentication is needed."
+
+
+@dataclass
+class TokenInfo:
+    """Store token information with expiry tracking."""
+
+    access_token: str
+    refresh_token: str | None = None
+    expires_at: datetime | None = None
+
+    @property
+    def is_expired(self) -> bool:
+        """Check if the access token is expired or will expire soon (within 5 minutes)."""
+        if not self.expires_at:
+            return False
+        return datetime.now(UTC) >= (self.expires_at - timedelta(minutes=5))
+
+    @property
+    def needs_refresh(self) -> bool:
+        """Check if token needs refresh (expired but we have a refresh token)."""
+        return self.is_expired and self.refresh_token is not None
 
 
 class KdkDevice(NamedTuple):
@@ -220,7 +245,7 @@ class KdkApiClient:
         self._password = password
         self._session = session
 
-        self._token = None
+        self._token_info: TokenInfo | None = None
 
         LOGGER.info("KDK API client initiated")
 
@@ -230,7 +255,69 @@ class KdkApiClient:
         duration = asyncio.get_event_loop().time() - start_time
         LOGGER.debug(f"Request took {round(duration, 1)}s")
 
-    async def login(self):
+    async def login(self, force_new_login: bool = False):
+        """Authenticate and get tokens."""
+        if not force_new_login and self._token_info and not self._token_info.is_expired:
+            LOGGER.debug("Using existing valid token")
+            return
+
+        if not force_new_login and self._token_info and self._token_info.needs_refresh:
+            LOGGER.debug("Token expired, attempting refresh")
+            try:
+                await self._refresh_token()
+                return
+            except RefreshTokenExpired:
+                LOGGER.warning("Refresh token expired, performing full login")
+            except Exception as e:
+                LOGGER.warning(f"Token refresh failed: {e}, performing full login")
+
+        LOGGER.debug("Performing full login")
+        await self._perform_full_login()
+
+    async def _refresh_token(self):
+        """Refresh the access token using the refresh token."""
+        if not self._token_info or not self._token_info.refresh_token:
+            raise RefreshTokenExpired("No refresh token available")
+
+        try:
+            response = await self._session.request(
+                method="POST",
+                url="https://authglb.digital.panasonic.com/oauth/token",
+                json={
+                    "grant_type": "refresh_token",
+                    "refresh_token": self._token_info.refresh_token,
+                    "client_id": self.CLIENT_ID,
+                },
+            )
+
+            if response.status == 401:
+                raise RefreshTokenExpired("Refresh token is invalid or expired")
+
+            response.raise_for_status()
+            token_data = await response.json()
+
+            # Update token info
+            self._token_info = TokenInfo(
+                access_token=token_data["access_token"],
+                refresh_token=token_data.get(
+                    "refresh_token", self._token_info.refresh_token
+                ),
+                expires_at=datetime.now(UTC) + timedelta(seconds=3600),
+                # N.B. refresh earlier as request somehow fails if set to 86400
+                # + timedelta(seconds=token_data.get("expires_in", 86400)),
+            )
+
+            LOGGER.debug("Token refreshed successfully")
+
+        except Exception as e:
+            if isinstance(e, RefreshTokenExpired):
+                raise
+            LOGGER.error(f"Token refresh failed: {e}")
+            raise RefreshTokenExpired(f"Failed to refresh token: {e}")
+
+    async def _perform_full_login(self):
+        """Perform the full OAuth login flow."""
+
         def __extract_form_values(html_string: str):
             # Extract wresult value using regex
             wresult_pattern = re.compile(r'name="wresult"\s+value="([^"]*)"')
@@ -319,22 +406,35 @@ class KdkApiClient:
             allow_redirects=False,
         )
 
-        self._token = (await request_5.json())["access_token"]
+        token_data = await request_5.json()
+
+        # Store both access and refresh tokens
+        self._token_info = TokenInfo(
+            access_token=token_data["access_token"],
+            refresh_token=token_data.get("refresh_token"),
+            expires_at=datetime.now(UTC) + timedelta(seconds=3600),
+            # N.B. refresh earlier as request somehow fails if set to 86400
+            # + timedelta(seconds=token_data.get("expires_in", 86400)),
+        )
+
         LOGGER.debug("Logged in successfully")
 
     def get_auth_headers(self):
         "Get the authentication headers."
+        if not self._token_info:
+            raise AuthExpired("No valid token available")
+
         return {
-            "Authorization": self._token,
+            "Authorization": self._token_info.access_token,
             "X-Timestamp": datetime.now(UTC).strftime("%Y%m%d%H%M%S"),
             "x-api-key": KdkApiClient.APP_KEY,
             "User-Agent": KdkApiClient.USER_AGENT,
         }
 
     async def _make_request(self, method: str, url: str, **kwargs):
-        "Make an authenticated request."
-        if not self._token:
-            await self.login()
+        "Make an authenticated request with automatic token refresh."
+
+        await self.login()
 
         headers = self.get_auth_headers()
         if "headers" in kwargs:
@@ -347,9 +447,32 @@ class KdkApiClient:
             await self._log_response_time(response, start_time)
 
             if response.status == 401:
-                raise AuthExpired(await response.text())
-            response.raise_for_status()
+                # Token might be expired, try to refresh and retry once
+                LOGGER.warning("Received 401, attempting token refresh")
+                try:
+                    await self.login(force_new_login=True)
+                    # Update headers with new token
+                    headers = self.get_auth_headers()
+                    if "headers" in kwargs:
+                        headers.update(kwargs["headers"])
+                    kwargs["headers"] = headers
 
+                    # Retry the request
+                    async with self._session.request(
+                        method, url, **kwargs
+                    ) as retry_response:
+                        if retry_response.status == 401:
+                            raise AuthExpired(
+                                "Authentication failed after token refresh"
+                            )
+                        retry_response.raise_for_status()
+                        return await retry_response.json()
+
+                except Exception as e:
+                    LOGGER.error(f"Token refresh and retry failed: {e}")
+                    raise AuthExpired(f"Authentication failed: {e}")
+
+            response.raise_for_status()
             return await response.json()
 
     async def get_registered_fans(self):
