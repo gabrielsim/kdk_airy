@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import AuthExpired, KdkApiClient, KdkDevice
+from .api import AuthExpired, KdkApiClient, KdkDevice, RefreshTokenExpired
 from .const import DOMAIN, LOGGER
 
 
@@ -42,8 +42,9 @@ class KdkAiryDataUpdateCoordinator(DataUpdateCoordinator):
             LOGGER.debug(f"Polling for updates from {len(self._devices)} fans")
             statuses = await self._api.get_statuses(devices=self._devices)
             return statuses | {"polled_time": start_time}
-        except AuthExpired as exception:
+        except (AuthExpired, RefreshTokenExpired) as exception:
+            LOGGER.warning(f"Authentication failed: {exception}")
             raise ConfigEntryAuthFailed(exception) from exception
         except Exception as exception:
-            LOGGER.error(exception)
+            LOGGER.error(f"Unexpected error during update: {exception}")
             raise UpdateFailed(exception) from exception
