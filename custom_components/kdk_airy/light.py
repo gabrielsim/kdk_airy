@@ -5,7 +5,7 @@ import math
 
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
-    ATTR_COLOR_TEMP,
+    ATTR_COLOR_TEMP_KELVIN,
     ColorMode,
     LightEntity,
     LightEntityDescription,
@@ -14,7 +14,6 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util.color import (
-    color_temperature_kelvin_to_mired as kelvin_to_mired,
     value_to_brightness,
 )
 
@@ -69,9 +68,9 @@ class IntegrationBlueprintLight(CoordinatorEntity, LightEntity):
         self.entity_description = entity_description
         self._attr_is_on = False
         self._attr_brightness = MAX_BRIGHTNESS  # Range from 1..255
-        self._attr_color_temp = kelvin_to_mired(DEFAULT_KELVIN)
-        self._attr_min_mireds = kelvin_to_mired(MAX_KELVIN)
-        self._attr_max_mireds = kelvin_to_mired(MIN_KELVIN)
+        self._attr_color_temp_kelvin = DEFAULT_KELVIN
+        self._attr_min_color_temp_kelvin = MIN_KELVIN
+        self._attr_max_color_temp_kelvin = MAX_KELVIN
         self._attr_supported_color_modes = {ColorMode.COLOR_TEMP}
         self._attr_color_mode = ColorMode.COLOR_TEMP
         self._appliance_id = appliance_id
@@ -142,7 +141,7 @@ class IntegrationBlueprintLight(CoordinatorEntity, LightEntity):
             self._attr_brightness = value_to_brightness(
                 (1, 100), device_settings.light_brightness
             )
-            self._attr_color_temp = kelvin_to_mired(
+            self._attr_color_temp_kelvin = int(
                 MIN_KELVIN
                 + device_settings.light_colour * ((MAX_KELVIN - MIN_KELVIN) / 100)
             )
@@ -174,8 +173,8 @@ class IntegrationBlueprintLight(CoordinatorEntity, LightEntity):
             self._attr_brightness = math.ceil(
                 kwargs[ATTR_BRIGHTNESS] / (MAX_BRIGHTNESS / 10)
             ) * (MAX_BRIGHTNESS / 10)
-        if ATTR_COLOR_TEMP in kwargs:
-            self._attr_color_temp = kwargs[ATTR_COLOR_TEMP]
+        if ATTR_COLOR_TEMP_KELVIN in kwargs:
+            self._attr_color_temp_kelvin = kwargs[ATTR_COLOR_TEMP_KELVIN]
         self.async_write_ha_state()
 
         if self.brightness_pct in [10, 20, 30]:
