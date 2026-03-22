@@ -116,7 +116,7 @@ class IntegrationBlueprintFan(CoordinatorEntity, FanEntity):
 
         self._attr_is_on = device_settings.fan_power
         self._attr_current_direction = device_settings.fan_direction
-        self._attr_percentage = device_settings.fan_volume
+        if self._attr_is_on: self._attr_percentage = device_settings.fan_volume
 
         self.async_write_ha_state()
 
