@@ -116,7 +116,10 @@ class IntegrationBlueprintFan(CoordinatorEntity, FanEntity):
 
         self._attr_is_on = device_settings.fan_power
         self._attr_current_direction = device_settings.fan_direction
-        if self._attr_is_on: self._attr_percentage = device_settings.fan_volume
+        if self._attr_is_on: 
+            self._attr_percentage = device_settings.fan_volume
+        else:
+            self._attr_percentage = 0
 
         self.async_write_ha_state()
 
@@ -124,7 +127,10 @@ class IntegrationBlueprintFan(CoordinatorEntity, FanEntity):
         """Set fan to the desired settings."""
 
         self._attr_is_on = settings.fan_power
-        self._attr_percentage = settings.fan_volume
+        if self._attr_is_on: 
+            self._attr_percentage = device_settings.fan_volume
+        else:
+            self._attr_percentage = 0
         self._attr_current_direction = settings.fan_direction
 
         self.async_write_ha_state()
