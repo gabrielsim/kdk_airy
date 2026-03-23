@@ -128,7 +128,7 @@ class IntegrationBlueprintFan(CoordinatorEntity, FanEntity):
 
         self._attr_is_on = settings.fan_power
         if self._attr_is_on: 
-            self._attr_percentage = device_settings.fan_volume
+            self._attr_percentage = settings.fan_volume
         else:
             self._attr_percentage = 0
         self._attr_current_direction = settings.fan_direction
