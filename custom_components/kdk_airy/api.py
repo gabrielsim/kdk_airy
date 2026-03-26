@@ -82,7 +82,7 @@ class KdkDevice(NamedTuple):
     @property
     def has_lights(self):
         "Whether the fan device also has lights."
-        return self.product_code in ["E48GP", "48INCH-LED"]
+        return self.product_code in ["E48GP", "48INCH-LED", "F40GP"]
 
 
 @dataclass
@@ -227,6 +227,7 @@ class KdkApiClient:
         "E48HP",
         "E48GP",
         "48INCH-LED",
+        "F40GP",
     ]
 
     # Hard-coded values from the KDK Ceiling Fan app v1.1.0
@@ -499,11 +500,11 @@ class KdkApiClient:
         sent_commands = {}
 
         for device in devices:
-            get_status_packet = {
-                "E48HP": "0A00800000F00000860000880000F80000F20000F10000F90000FA0000FB00",
-                "E48GP": "0F00800000F00000860000880000F80000F20000F10000F90000FA0000FB0000F30000F50000F40000F70000F600",
-                "48INCH-LED": "0F00800000F00000860000880000F80000F20000F10000F90000FA0000FB0000F30000F50000F40000F70000F600",
-            }[device.product_code]
+            get_status_packet = (
+                "0F00800000F00000860000880000F80000F20000F10000F90000FA0000FB0000F30000F50000F40000F70000F600"
+                if device.has_lights
+                else "0A00800000F00000860000880000F80000F20000F10000F90000FA0000FB00"
+            )
 
             command_request_id = await self.send_command(
                 method="GET",
