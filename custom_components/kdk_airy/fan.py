@@ -75,7 +75,7 @@ class IntegrationBlueprintFan(CoordinatorEntity, FanEntity, RestoreEntity):
         self._api = api
         self._attr_unique_id = f"{appliance_id}_fan"
         self._last_change = datetime(1970, 1, 1)
-        self._last_known_speed: int = 60  # default fallback speed
+        self._last_known_speed: int = 100  # default fallback speed
 
     @property
     def available(self):
