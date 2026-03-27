@@ -4,6 +4,7 @@ Home Assistant custom integration to control KDK Airy fan (and light) over the i
 ## Supported Devices
 - KDK Airy E48HP (without light)
 - KDK Airy E48GP (with light)
+- KDK Airy F40GP (with light)
 
 ## Installation
 ### Via HACS
