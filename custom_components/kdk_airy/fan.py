@@ -12,6 +12,7 @@ from homeassistant.components.fan import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, callback
 from homeassistant.util.percentage import int_states_in_range
 
@@ -46,7 +47,7 @@ async def async_setup_entry(
     )
 
 
-class IntegrationBlueprintFan(CoordinatorEntity, FanEntity):
+class IntegrationBlueprintFan(CoordinatorEntity, FanEntity, RestoreEntity):
     """Representation of an Integration Blueprint Fan."""
 
     def __init__(
@@ -74,6 +75,7 @@ class IntegrationBlueprintFan(CoordinatorEntity, FanEntity):
         self._api = api
         self._attr_unique_id = f"{appliance_id}_fan"
         self._last_change = datetime(1970, 1, 1)
+        self._last_known_speed: int = 100  # default fallback speed
 
     @property
     def available(self):
@@ -86,6 +88,10 @@ class IntegrationBlueprintFan(CoordinatorEntity, FanEntity):
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added to hass."""
         await super().async_added_to_hass()
+        if last_state := await self.async_get_last_state():
+            if last_percentage := last_state.attributes.get("percentage"):
+                if isinstance(last_percentage, int | float) and last_percentage > 0:
+                    self._last_known_speed = int(last_percentage)
         self._handle_coordinator_update()
 
     @property
@@ -97,6 +103,7 @@ class IntegrationBlueprintFan(CoordinatorEntity, FanEntity):
     def speed_count(self) -> int:
         """Return the number of speeds the fan supports."""
         return self._attr_speed_count
+
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -116,8 +123,10 @@ class IntegrationBlueprintFan(CoordinatorEntity, FanEntity):
 
         self._attr_is_on = device_settings.fan_power
         self._attr_current_direction = device_settings.fan_direction
-        if self._attr_is_on: 
+        if self._attr_is_on:
             self._attr_percentage = device_settings.fan_volume
+            if device_settings.fan_volume:
+                self._last_known_speed = device_settings.fan_volume
         else:
             self._attr_percentage = 0
 
@@ -127,8 +136,10 @@ class IntegrationBlueprintFan(CoordinatorEntity, FanEntity):
         """Set fan to the desired settings."""
 
         self._attr_is_on = settings.fan_power
-        if self._attr_is_on: 
+        if self._attr_is_on:
             self._attr_percentage = settings.fan_volume
+            if settings.fan_volume:
+                self._last_known_speed = settings.fan_volume
         else:
             self._attr_percentage = 0
         self._attr_current_direction = settings.fan_direction
@@ -187,9 +198,8 @@ class IntegrationBlueprintFan(CoordinatorEntity, FanEntity):
         await self.async_set_fan_settings(
             KdkDeviceSettings(
                 fan_power=True,
-                fan_volume=percentage or 100,  # default to highest speed (100%)
-                fan_direction=self._attr_current_direction
-                or "forward",  # default to forward direction
+                fan_volume=percentage or self._last_known_speed,
+                fan_direction=self._attr_current_direction or "forward",
             )
         )
 
