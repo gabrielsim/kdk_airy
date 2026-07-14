@@ -82,7 +82,7 @@ class KdkDevice(NamedTuple):
     @property
     def has_lights(self):
         "Whether the fan device also has lights."
-        return self.product_code in ["E48GP", "48INCH-LED", "F40GP"]
+        return self.product_code in ["E48GP", "48INCH-LED", "F40GP", "K12UC"]
 
 
 @dataclass
@@ -228,6 +228,7 @@ class KdkApiClient:
         "E48GP",
         "48INCH-LED",
         "F40GP",
+        "K12UC",
     ]
 
     # Hard-coded values from the KDK Ceiling Fan app v1.1.0
