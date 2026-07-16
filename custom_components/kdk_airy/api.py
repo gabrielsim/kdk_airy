@@ -82,7 +82,7 @@ class KdkDevice(NamedTuple):
     @property
     def has_lights(self):
         "Whether the fan device also has lights."
-        return self.product_code in ["E48GP", "48INCH-LED", "F40GP", "K12UC"]
+        return self.product_code in ["E48GP", "H56GP", "48INCH-LED", "F40GP", "K12UC"]
 
 
 @dataclass
@@ -226,6 +226,7 @@ class KdkApiClient:
     SUPPORTED_PRODUCT_CODES = [
         "E48HP",
         "E48GP",
+        "H56GP",
         "48INCH-LED",
         "F40GP",
         "K12UC",
