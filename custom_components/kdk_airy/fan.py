@@ -11,18 +11,32 @@ from homeassistant.components.fan import (
     FanEntityFeature,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import config_validation as cv, entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, callback
 from homeassistant.util.percentage import int_states_in_range
+import voluptuous as vol
 
 from .api import KdkApiClient, KdkDeviceSettings
-from .const import LOGGER
+from .combined import combined_settings
+from .const import LOGGER, MAX_KELVIN, MIN_KELVIN
 from .coordinator import KdkAiryDataUpdateCoordinator
 from .data import KdkConfigEntry
 
 WIND_SPEED_RANGE = (1, 10)  # Min and max speed, 1-10
 Direction = Literal["forward", "reverse"]
+
+SERVICE_SET_FAN_AND_LIGHT = "set_fan_and_light"
+SET_FAN_AND_LIGHT_SCHEMA = {
+    vol.Optional("fan_percentage"): vol.All(vol.Coerce(int), vol.Range(0, 100)),
+    vol.Optional("fan_direction"): vol.In(["forward", "reverse"]),
+    vol.Optional("light_brightness_pct"): vol.All(vol.Coerce(int), vol.Range(0, 100)),
+    vol.Optional("light_color_temp_kelvin"): vol.All(
+        vol.Coerce(int), vol.Range(MIN_KELVIN, MAX_KELVIN)
+    ),
+}
 
 
 async def async_setup_entry(
@@ -42,8 +56,16 @@ async def async_setup_entry(
             ),
             appliance_id=device.appliance_id,
             api=entry.runtime_data.client,
+            has_lights=device.has_lights,
         )
         for device in (await entry.runtime_data.client.get_registered_fans())
+    )
+
+    # Fan and light in one command: one round trip and one beep instead of two.
+    entity_platform.async_get_current_platform().async_register_entity_service(
+        SERVICE_SET_FAN_AND_LIGHT,
+        cv.make_entity_service_schema(SET_FAN_AND_LIGHT_SCHEMA),
+        "async_set_fan_and_light",
     )
 
 
@@ -56,6 +78,7 @@ class IntegrationBlueprintFan(CoordinatorEntity, FanEntity, RestoreEntity):
         entity_description: FanEntityDescription,
         appliance_id: str,
         api: KdkApiClient,
+        has_lights: bool = False,
     ) -> None:
         """Initialize the fan."""
         super().__init__(coordinator=coordinator)
@@ -73,6 +96,7 @@ class IntegrationBlueprintFan(CoordinatorEntity, FanEntity, RestoreEntity):
         self._attr_current_direction: Direction = "forward"
         self._appliance_id = appliance_id
         self._api = api
+        self._has_lights = has_lights
         self._attr_unique_id = f"{appliance_id}_fan"
         self._last_change = datetime(1970, 1, 1)
         self._last_known_speed: int = 100  # default fallback speed
@@ -207,3 +231,34 @@ class IntegrationBlueprintFan(CoordinatorEntity, FanEntity, RestoreEntity):
         """Turn the fan off."""
 
         await self.async_set_fan_settings(KdkDeviceSettings(fan_power=False))
+
+    async def async_set_fan_and_light(self, **kwargs: Any) -> None:
+        """Set the fan and its light in a single command."""
+
+        try:
+            settings = combined_settings(
+                self.coordinator.data.get(self._appliance_id),
+                self._has_lights,
+                **kwargs,
+            )
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+
+        LOGGER.info(f"Set fan and light settings: {settings}")
+
+        if settings.fan_power is not None:
+            self._attr_is_on = settings.fan_power
+            self._attr_percentage = settings.fan_volume if settings.fan_power else 0
+            if settings.fan_volume:
+                self._last_known_speed = settings.fan_volume
+            if settings.fan_direction:
+                self._attr_current_direction = settings.fan_direction
+            self._last_change = datetime.now()
+            self.async_write_ha_state()
+
+        await self._api.change_settings(
+            appliance_id=self._appliance_id,
+            desired_setting=settings,
+        )
+        # the light entity picks up its new state from a fresh poll
+        await self.coordinator.async_request_refresh()

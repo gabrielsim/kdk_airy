@@ -18,13 +18,10 @@ from homeassistant.util.color import (
 )
 
 from .api import KdkApiClient, KdkDeviceSettings
-from .const import LOGGER
+from .const import DEFAULT_KELVIN, LOGGER, MAX_KELVIN, MIN_KELVIN
 from .coordinator import KdkAiryDataUpdateCoordinator
 from .data import KdkConfigEntry
 
-MIN_KELVIN = 3000  # Warmest temperature, API = 0%
-MAX_KELVIN = 7000  # Coolest temperature, API = 100%
-DEFAULT_KELVIN = 6000  # Cloudy
 MAX_BRIGHTNESS = 255
 
 

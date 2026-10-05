@@ -48,6 +48,44 @@ Requirements for local control:
 - Light temperature can be changed.
 - Light brightness at 10% / 20% / 30% is reserved for night light feature and corresponds to Low / Medium / High night light.
 
+## Actions
+### `kdk_airy.set_fan_and_light`
+Changes a fan and its light together in **one** command: one round trip and one beep, where calling `fan.turn_on` and `light.turn_on` separately takes two. Target the fan entity. Any field left out keeps its current value; 0% turns that part off.
+
+| Field | Values |
+|---|---|
+| `fan_percentage` | 0-100, in 10% steps, rounded up. 0 turns the fan off |
+| `fan_direction` | `forward` / `reverse` |
+| `light_brightness_pct` | 0-100, in 10% steps, rounded up. 0 turns the light off; 10 / 20 / 30 are night light low / medium / high |
+| `light_color_temp_kelvin` | 3000 (warm) - 7000 (white). Not available with night light |
+
+For example, a wall switch that toggles a fan and its light together:
+
+```yaml
+actions:
+  - if:
+      - condition: state
+        entity_id: light.bedroom
+        state: "off"
+      - condition: state
+        entity_id: fan.bedroom
+        state: "off"
+    then:
+      - action: kdk_airy.set_fan_and_light
+        target:
+          entity_id: fan.bedroom
+        data:
+          fan_percentage: 50
+          light_brightness_pct: 100
+    else:
+      - action: kdk_airy.set_fan_and_light
+        target:
+          entity_id: fan.bedroom
+        data:
+          fan_percentage: 0
+          light_brightness_pct: 0
+```
+
 ## Troubleshooting
 - To see whether fans are being reached locally, enable debug logging for `custom_components.kdk_airy`; it logs how many fans were found on the LAN and any fallback to the cloud.
 - If entity is marked as unavailable/no response, it likely means that switch is off or wi-fi is disconnected (press the wifi button on the remote control).

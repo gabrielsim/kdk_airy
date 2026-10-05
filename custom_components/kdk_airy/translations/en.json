@@ -17,5 +17,29 @@
             "connection": "Unable to connect to the server.",
             "unknown": "Unknown error occurred."
         }
+    },
+    "services": {
+        "set_fan_and_light": {
+            "name": "Set fan and light",
+            "description": "Change a fan and its light together in one command: one round trip and one beep instead of two. Anything left out stays as it is.",
+            "fields": {
+                "fan_percentage": {
+                    "name": "Fan speed",
+                    "description": "Fan speed in 10% steps, rounded up. 0 turns the fan off."
+                },
+                "fan_direction": {
+                    "name": "Fan direction",
+                    "description": "Forward or reverse. Keeps the current direction if left out."
+                },
+                "light_brightness_pct": {
+                    "name": "Light brightness",
+                    "description": "Brightness in 10% steps, rounded up. 0 turns the light off; 10%, 20% and 30% are night light low, medium and high."
+                },
+                "light_color_temp_kelvin": {
+                    "name": "Light colour temperature",
+                    "description": "3000 K (warm) to 7000 K (white). Not available with night light."
+                }
+            }
+        }
     }
 }

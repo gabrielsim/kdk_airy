@@ -1,0 +1,34 @@
+set_fan_and_light:
+  target:
+    entity:
+      integration: kdk_airy
+      domain: fan
+  fields:
+    fan_percentage:
+      example: 50
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 10
+          unit_of_measurement: "%"
+    fan_direction:
+      selector:
+        select:
+          options:
+            - forward
+            - reverse
+    light_brightness_pct:
+      example: 100
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 10
+          unit_of_measurement: "%"
+    light_color_temp_kelvin:
+      selector:
+        color_temp:
+          unit: kelvin
+          min: 3000
+          max: 7000
