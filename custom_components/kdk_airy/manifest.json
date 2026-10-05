@@ -5,8 +5,9 @@
       "@gabrielsim"
     ],
     "config_flow": true,
+    "dependencies": ["network"],
     "documentation": "https://github.com/gabrielsim/kdk_airy",
-    "iot_class": "cloud_polling",
+    "iot_class": "local_polling",
     "issue_tracker": "https://github.com/gabrielsim/kdk_airy/issues",
-    "version": "1.0.0"
+    "version": "1.5.0"
   }
