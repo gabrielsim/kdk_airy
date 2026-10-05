@@ -14,6 +14,7 @@ from homeassistant.loader import async_get_loaded_integration
 
 from .api import KdkApiClient
 from .client import KdkHybridClient
+from .local import subnet_broadcast_addresses
 from .coordinator import KdkAiryDataUpdateCoordinator
 from .data import KdkConfigEntry, KdkData
 
@@ -39,8 +40,10 @@ async def async_setup_entry(
     coordinator = KdkAiryDataUpdateCoordinator(hass=hass, api=client)
     await client.login()
 
-    broadcast_addrs = await network.async_get_ipv4_broadcast_addresses(hass)
-    await client.async_start([str(addr) for addr in broadcast_addrs])
+    # Not network.async_get_ipv4_broadcast_addresses(): by default that returns
+    # only 255.255.255.255, which the fans don't answer.
+    adapters = await network.async_get_adapters(hass)
+    await client.async_start(subnet_broadcast_addresses(adapters))
     try:
         entry.runtime_data = KdkData(
             client=client,

@@ -12,6 +12,7 @@ on its own against real hardware.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import re
 import struct
 
@@ -271,6 +272,28 @@ class _DiscoveryProtocol(asyncio.DatagramProtocol):
     def error_received(self, exc: Exception) -> None:
         # e.g. 255.255.255.255 is unroutable on some hosts; other targets still work
         LOGGER.debug(f"Discovery send error: {exc}")
+
+
+def subnet_broadcast_addresses(adapters: list[dict]) -> list[str]:
+    """Subnet-directed broadcast address of every enabled IPv4 adapter.
+
+    Takes Home Assistant's network adapter list. The fans answer only a
+    subnet-directed broadcast such as 192.168.1.255 and ignore 255.255.255.255,
+    which is all that network.async_get_ipv4_broadcast_addresses returns under
+    HA's default network settings - hence computing it here.
+    """
+    addresses = set()
+    for adapter in adapters:
+        if not adapter.get("enabled"):
+            continue
+        for ip_info in adapter.get("ipv4", []):
+            interface = ipaddress.ip_interface(
+                f"{ip_info['address']}/{ip_info['network_prefix']}"
+            )
+            if interface.ip.is_loopback or interface.network.prefixlen >= 31:
+                continue  # no broadcast address on loopback or point-to-point links
+            addresses.add(str(interface.network.broadcast_address))
+    return sorted(addresses)
 
 
 async def async_discover(

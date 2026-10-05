@@ -72,6 +72,14 @@ class KdkHybridClient:
                 "integration) is probably holding it"
             )
             return
+        if not self._broadcast:
+            LOGGER.warning(
+                "Local control disabled, using the cloud only: no IPv4 network "
+                "adapter is enabled in Home Assistant's network settings"
+            )
+            return
+        # Known devices let the first search report how many fans it found.
+        await self.get_registered_fans()
         await self._async_discover()
 
     async def async_stop(self) -> None:
@@ -113,7 +121,10 @@ class KdkHybridClient:
 
         if self._devices is not None:
             local = sum(1 for d in self._devices if d.hashed_guid in self._ips)
-            LOGGER.debug(f"{local} of {len(self._devices)} fans reachable locally")
+            LOGGER.debug(
+                f"{local} of {len(self._devices)} fans reachable locally "
+                f"(searched {', '.join(self._broadcast)})"
+            )
 
     def _schedule_discovery(self, min_age: float) -> None:
         "Rediscover in the background, unless one ran recently or is running."
