@@ -48,6 +48,46 @@ Requirements for local control:
 - Light temperature can be changed.
 - Light brightness at 10% / 20% / 30% is reserved for night light feature and corresponds to Low / Medium / High night light.
 
+## Actions
+### `kdk_airy.set_fan_and_light`
+Changes a fan and its light together in **one** command: one round trip and one beep, where calling `fan.turn_on` and `light.turn_on` separately takes two. Target the fan entity. Any field left out keeps its current value; 0% turns that part off. The "last" settings come from the fan itself, which remembers them while off, so changes made with the remote control are included. An explicit speed or brightness wins over `fan_on` / `light_on`.
+
+| Field | Values |
+|---|---|
+| `fan_on` | `true`: on at its last speed and direction. `false`: off |
+| `light_on` | `true`: on exactly as last left (normal at its last brightness and colour, or night light at its last level). `false`: off |
+| `fan_percentage` | 0-100, in 10% steps, rounded up. 0 turns the fan off |
+| `fan_direction` | `forward` / `reverse` |
+| `light_brightness_pct` | 0-100, in 10% steps, rounded up. 0 turns the light off; 10 / 20 / 30 are night light low / medium / high |
+| `light_color_temp_kelvin` | 3000 (warm) - 7000 (white). Not available with night light |
+
+For example, a wall switch that toggles a fan and its light together:
+
+```yaml
+actions:
+  - if:
+      - condition: state
+        entity_id: light.bedroom
+        state: "off"
+      - condition: state
+        entity_id: fan.bedroom
+        state: "off"
+    then:
+      - action: kdk_airy.set_fan_and_light
+        target:
+          entity_id: fan.bedroom
+        data:
+          fan_on: true
+          light_on: true
+    else:
+      - action: kdk_airy.set_fan_and_light
+        target:
+          entity_id: fan.bedroom
+        data:
+          fan_on: false
+          light_on: false
+```
+
 ## Troubleshooting
 - To see whether fans are being reached locally, enable debug logging for `custom_components.kdk_airy`; it logs how many fans were found on the LAN and any fallback to the cloud.
 - If entity is marked as unavailable/no response, it likely means that switch is off or wi-fi is disconnected (press the wifi button on the remote control).
