@@ -1,5 +1,5 @@
 # KDK Airy for Home Assistant
-Home Assistant custom integration to control KDK Airy fan (and light) over the internet.
+Home Assistant custom integration to control KDK Airy fan (and light), locally over your network where possible and through the KDK cloud otherwise.
 
 ## Supported Devices
 - KDK Airy E48HP (without light)
@@ -25,6 +25,19 @@ Manually copy `kdk_airy` folder from [latest release](https://github.com/gabriel
 2. Install the integration and login with the same username/password as your KDK Ceiling Fan app.
 3. Supported devices (fan/light) will be added to Home Assistant. The default entity names will follow the ones set in the KDK Ceiling Fan app.
 
+## Local control
+Fans on the same network as Home Assistant are controlled directly over the LAN, the same way the official app does when your phone is on home Wi-Fi. That means:
+- Commands take effect in well under a second instead of several seconds.
+- Fan status is polled every 5s instead of 15s.
+- No dependency on the KDK cloud for day-to-day control.
+
+The KDK account is still used to find your fans and their names, and as a fallback: any fan that can't be reached locally is controlled through the cloud exactly as before. This happens automatically, per fan, with nothing to configure.
+
+Requirements for local control:
+- Home Assistant must be on the same subnet as the fans. It finds them with a UDP broadcast on port 50125; they don't advertise over mDNS.
+- Home Assistant needs host networking (Home Assistant OS and Supervised have it; for Docker, use `--network host`).
+- UDP port 3610 must be free on the Home Assistant host. If another integration (e.g. ECHONET Lite) is using it, a warning is logged and the integration runs cloud-only.
+
 ## Supported features
 ### Fan
 - Fan speed can be set at 10% intervals, rounded up, i.e. 82% -> 90%.
@@ -36,8 +49,9 @@ Manually copy `kdk_airy` folder from [latest release](https://github.com/gabriel
 - Light brightness at 10% / 20% / 30% is reserved for night light feature and corresponds to Low / Medium / High night light.
 
 ## Troubleshooting
+- To see whether fans are being reached locally, enable debug logging for `custom_components.kdk_airy`; it logs how many fans were found on the LAN and any fallback to the cloud.
 - If entity is marked as unavailable/no response, it likely means that switch is off or wi-fi is disconnected (press the wifi button on the remote control).
 
 ## Known issues / PR is welcome
 - Light temperature (degrees of Kelvin _K_) is approximated.
-- Close to (but not) realtime sync on fan status, polls for current fan status every 15s.
+- Close to (but not) realtime sync on fan status: the fans don't push changes, so status is polled every 5s (15s for any fan only reachable through the cloud). A change made with the remote control shows up at the next poll.
