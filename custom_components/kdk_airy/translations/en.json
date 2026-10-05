@@ -23,6 +23,14 @@
             "name": "Set fan and light",
             "description": "Change a fan and its light together in one command: one round trip and one beep instead of two. Anything left out stays as it is.",
             "fields": {
+                "fan_on": {
+                    "name": "Fan on",
+                    "description": "On turns the fan on at its last speed and direction; off turns it off. A fan speed, if given, is used instead of the last one."
+                },
+                "light_on": {
+                    "name": "Light on",
+                    "description": "On turns the light on exactly as it was last left: normal at its last brightness and colour, or night light at its last level. Off turns it off. A brightness or colour, if given, is used instead."
+                },
                 "fan_percentage": {
                     "name": "Fan speed",
                     "description": "Fan speed in 10% steps, rounded up. 0 turns the fan off."

@@ -31,29 +31,56 @@ def combined_settings(
     fan_direction: str | None = None,
     light_brightness_pct: int | None = None,
     light_color_temp_kelvin: int | None = None,
+    fan_on: bool | None = None,
+    light_on: bool | None = None,
+    fallback_fan_volume: int | None = None,
 ) -> KdkDeviceSettings:
     """Build one KdkDeviceSettings covering both the fan and the light.
 
-    Anything not given keeps its current value. 0% turns that part off.
-    Raises ValueError for requests the fan can't carry out.
+    Anything not given keeps its current value. 0% (or fan_on / light_on false)
+    turns that part off. fan_on / light_on true with no explicit level turns it
+    on at its last setting, which the fan remembers and reports while off: the
+    last speed and direction, and the light's last mode - normal at its last
+    brightness and colour, or night light at its last level. An explicit level
+    wins over *_on true. Raises ValueError for requests the fan can't carry out.
     """
-    touches_fan = fan_percentage is not None or fan_direction is not None
+    touches_fan = (
+        fan_on is not None or fan_percentage is not None or fan_direction is not None
+    )
     touches_light = (
-        light_brightness_pct is not None or light_color_temp_kelvin is not None
+        light_on is not None
+        or light_brightness_pct is not None
+        or light_color_temp_kelvin is not None
     )
     if not touches_fan and not touches_light:
         raise ValueError("Give at least one fan or light setting")
     if touches_light and not has_lights:
         raise ValueError("This fan has no light")
+    if fan_on is False and (fan_percentage or fan_direction is not None):
+        raise ValueError("fan_on is false, but a fan speed or direction was given")
+    if fan_on is True and fan_percentage == 0:
+        raise ValueError("fan_on is true, but fan_percentage is 0")
+    if light_on is False and (
+        light_brightness_pct or light_color_temp_kelvin is not None
+    ):
+        raise ValueError("light_on is false, but a brightness or colour was given")
+    if light_on is True and light_brightness_pct == 0:
+        raise ValueError("light_on is true, but light_brightness_pct is 0")
 
     settings = KdkDeviceSettings()
 
     if touches_fan:
         percentage = fan_percentage
-        if percentage is None:  # direction only: keep the current speed
+        if fan_on is False:
+            percentage = 0
+        elif percentage is None and fan_on:  # on at its last speed
+            percentage = (
+                (current and current.fan_volume) or fallback_fan_volume or 100
+            )
+        elif percentage is None:  # direction only: keep the current speed
             if not (current and current.fan_power and current.fan_volume):
                 raise ValueError(
-                    "The fan is off; give fan_percentage to set its direction"
+                    "The fan is off; give fan_percentage or fan_on to set its direction"
                 )
             percentage = current.fan_volume
         if percentage == 0:
@@ -66,12 +93,28 @@ def combined_settings(
             )
 
     if touches_light:
-        brightness = light_brightness_pct
-        if brightness is None:  # colour only: keep the current day brightness
-            brightness = (current and current.light_brightness) or 100
-        if brightness == 0:
+        if light_on is False or light_brightness_pct == 0:
             settings.light_power = False
+        elif light_brightness_pct is None and light_color_temp_kelvin is None:
+            # light_on with no levels: exactly as it was last left
+            settings.light_power = True
+            if current and current.light_mode == "night":
+                settings.light_mode = "night"
+                settings.light_night_light_brightness = (
+                    current.light_night_light_brightness or "low"
+                )
+            else:
+                settings.light_mode = "day"
+                settings.light_brightness = (current and current.light_brightness) or 100
+                settings.light_colour = (
+                    current.light_colour
+                    if current and current.light_colour is not None
+                    else kelvin_to_colour(DEFAULT_KELVIN)
+                )
         else:
+            brightness = light_brightness_pct
+            if brightness is None:  # colour only: keep the current day brightness
+                brightness = (current and current.light_brightness) or 100
             brightness = _round_up_to_step(brightness)
             settings.light_power = True
             if brightness in NIGHT_LIGHT_LEVELS:

@@ -4,6 +4,12 @@ set_fan_and_light:
       integration: kdk_airy
       domain: fan
   fields:
+    fan_on:
+      selector:
+        boolean:
+    light_on:
+      selector:
+        boolean:
     fan_percentage:
       example: 50
       selector:

@@ -30,6 +30,8 @@ Direction = Literal["forward", "reverse"]
 
 SERVICE_SET_FAN_AND_LIGHT = "set_fan_and_light"
 SET_FAN_AND_LIGHT_SCHEMA = {
+    vol.Optional("fan_on"): cv.boolean,
+    vol.Optional("light_on"): cv.boolean,
     vol.Optional("fan_percentage"): vol.All(vol.Coerce(int), vol.Range(0, 100)),
     vol.Optional("fan_direction"): vol.In(["forward", "reverse"]),
     vol.Optional("light_brightness_pct"): vol.All(vol.Coerce(int), vol.Range(0, 100)),
@@ -239,6 +241,7 @@ class IntegrationBlueprintFan(CoordinatorEntity, FanEntity, RestoreEntity):
             settings = combined_settings(
                 self.coordinator.data.get(self._appliance_id),
                 self._has_lights,
+                fallback_fan_volume=self._last_known_speed,
                 **kwargs,
             )
         except ValueError as err:

@@ -50,10 +50,12 @@ Requirements for local control:
 
 ## Actions
 ### `kdk_airy.set_fan_and_light`
-Changes a fan and its light together in **one** command: one round trip and one beep, where calling `fan.turn_on` and `light.turn_on` separately takes two. Target the fan entity. Any field left out keeps its current value; 0% turns that part off.
+Changes a fan and its light together in **one** command: one round trip and one beep, where calling `fan.turn_on` and `light.turn_on` separately takes two. Target the fan entity. Any field left out keeps its current value; 0% turns that part off. The "last" settings come from the fan itself, which remembers them while off, so changes made with the remote control are included. An explicit speed or brightness wins over `fan_on` / `light_on`.
 
 | Field | Values |
 |---|---|
+| `fan_on` | `true`: on at its last speed and direction. `false`: off |
+| `light_on` | `true`: on exactly as last left (normal at its last brightness and colour, or night light at its last level). `false`: off |
 | `fan_percentage` | 0-100, in 10% steps, rounded up. 0 turns the fan off |
 | `fan_direction` | `forward` / `reverse` |
 | `light_brightness_pct` | 0-100, in 10% steps, rounded up. 0 turns the light off; 10 / 20 / 30 are night light low / medium / high |
@@ -75,15 +77,15 @@ actions:
         target:
           entity_id: fan.bedroom
         data:
-          fan_percentage: 50
-          light_brightness_pct: 100
+          fan_on: true
+          light_on: true
     else:
       - action: kdk_airy.set_fan_and_light
         target:
           entity_id: fan.bedroom
         data:
-          fan_percentage: 0
-          light_brightness_pct: 0
+          fan_on: false
+          light_on: false
 ```
 
 ## Troubleshooting
