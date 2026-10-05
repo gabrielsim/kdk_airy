@@ -38,6 +38,8 @@ REDISCOVER_UNMAPPED = 60  # a registered fan hasn't been found on the LAN yet
 REDISCOVER_AFTER_FAILURE = 10  # a local request just went unanswered
 REDISCOVER_PERIODIC = 600
 MAX_MISSES = 3  # consecutive unanswered polls before a fan is treated as moved
+STATUS_TIMEOUT = 3.0  # how long one fan's status read may take, busy spells included
+BUSY_RETRY = 0.3  # wait between reads while a fan is still busy with a command
 
 
 class KdkHybridClient:
@@ -163,31 +165,22 @@ class KdkHybridClient:
 
         local = [d for d in devices if d.hashed_guid in self._ips]
         results = await asyncio.gather(
-            *(
-                self._local.request(
-                    self._ips[d.hashed_guid], ESV_GET, status_props(d.has_lights)
-                )
-                for d in local
-            ),
-            return_exceptions=True,
+            *(self._async_local_status(d) for d in local), return_exceptions=True
         )
 
         statuses: dict[str, KdkDeviceSettings] = {}
         cloud = [d for d in devices if d.hashed_guid not in self._ips]
         for device, result in zip(local, results):
-            if isinstance(result, BaseException) or result[0] not in (
-                ESV_GET_RES,
-                ESV_GET_SNA,
-            ):
+            if isinstance(result, BaseException):
                 # One dropped packet shouldn't make a fan unavailable: ask the
                 # cloud this time, and only stop trying locally after repeats.
-                LOGGER.debug(f"No local reply from {device.name}: {result!r}")
+                LOGGER.debug(f"No local status from {device.name}: {result!r}")
                 self._record_miss(device)
                 cloud.append(device)
                 continue
             self._misses.pop(device.hashed_guid, None)
             statuses[device.appliance_id] = KdkDeviceSettings.parse_data_packet(
-                packet=props_to_cloud_packet(result[1])
+                packet=props_to_cloud_packet(result)
             )
 
         self._all_local = bool(devices) and not cloud
@@ -204,6 +197,35 @@ class KdkHybridClient:
             # The local fans are fine; don't fail the whole update for the rest.
             LOGGER.warning(f"Cloud fallback failed for {len(cloud)} fan(s): {err}")
             return statuses
+
+    async def _async_local_status(self, device: KdkDevice) -> list:
+        """Read one fan's status properties, waiting out a busy spell.
+
+        For about a second after it accepts a command, a fan answers status
+        reads with Get_SNA and every property empty (measured on an E48GP).
+        That means "busy", not "unknown": publishing it would blank the fan's
+        and light's state in HA, and make "turn on at last setting" fall back to
+        defaults. So read again until real values come back. A Get_SNA that does
+        carry data is a genuine partial reply and is used as is.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + STATUS_TIMEOUT
+        ip = self._ips[device.hashed_guid]
+        wanted = status_props(device.has_lights)
+        while True:
+            esv, props = await self._local.request(
+                ip, ESV_GET, wanted, timeout=max(0.1, deadline - loop.time())
+            )
+            if esv == ESV_GET_RES or (
+                esv == ESV_GET_SNA and any(edt for _, edt in props)
+            ):
+                return props
+            if loop.time() + BUSY_RETRY >= deadline:
+                raise TimeoutError(
+                    f"{device.name} still busy after {STATUS_TIMEOUT:.0f}s "
+                    f"(ESV {esv:02X}, no property values)"
+                )
+            await asyncio.sleep(BUSY_RETRY)
 
     # ----------------------------------------------------------------- commands
 
