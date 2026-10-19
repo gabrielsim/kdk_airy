@@ -271,8 +271,10 @@ class LocalTransport(asyncio.DatagramProtocol):
 
 
 class _DiscoveryProtocol(asyncio.DatagramProtocol):
-    def __init__(self) -> None:
+    def __init__(self, expect: set[str] | None) -> None:
         self.found: dict[str, str] = {}
+        self._expect = expect
+        self.complete = asyncio.Event()  # every expected fan has answered
 
     def datagram_received(self, data: bytes, addr) -> None:
         headers = {}
@@ -283,6 +285,8 @@ class _DiscoveryProtocol(asyncio.DatagramProtocol):
             # The address that answered, not the self-reported LOCATION: replies
             # are only accepted from the address requests are sent to.
             self.found[guid] = addr[0]
+            if self._expect and self._expect <= self.found.keys():
+                self.complete.set()
 
     def error_received(self, exc: Exception) -> None:
         # e.g. 255.255.255.255 is unroutable on some hosts; other targets still work
@@ -312,24 +316,37 @@ def subnet_broadcast_addresses(adapters: list[dict]) -> list[str]:
 
 
 async def async_discover(
-    broadcast_addrs: list[str], timeout: float = 4.0, attempts: int = 3
+    broadcast_addrs: list[str],
+    timeout: float = 4.0,
+    attempts: int = 3,
+    expect: set[str] | None = None,
 ) -> dict[str, str]:
     """Find fans on the LAN. Returns {HASHGUID: ip}.
 
     The fans don't do mDNS or port-1900 SSDP; this M-SEARCH on 50125, sent to
     the subnet broadcast address, is the only thing they answer. HASHGUID equals
-    hashed_guid from the cloud device list.
+    hashed_guid from the cloud device list. Searches are sent 1 s apart; given
+    `expect`, the search ends as soon as every one of those HASHGUIDs answers.
     """
     loop = asyncio.get_running_loop()
     transport, protocol = await loop.create_datagram_endpoint(
-        _DiscoveryProtocol, local_addr=("0.0.0.0", 0), allow_broadcast=True
+        lambda: _DiscoveryProtocol(expect),
+        local_addr=("0.0.0.0", 0),
+        allow_broadcast=True,
     )
+    deadline = loop.time() + timeout
     try:
-        for _ in range(attempts):
+        for attempt in range(attempts):
             for addr in broadcast_addrs:
                 transport.sendto(MSEARCH.format(host=addr).encode(), (addr, SSDP_PORT))
-            await asyncio.sleep(1.0)
-        await asyncio.sleep(max(0.0, timeout - attempts))
+            until = deadline if attempt == attempts - 1 else loop.time() + 1.0
+            try:
+                await asyncio.wait_for(
+                    protocol.complete.wait(), max(0.0, until - loop.time())
+                )
+                break
+            except TimeoutError:
+                pass
     finally:
         transport.close()
     return dict(protocol.found)

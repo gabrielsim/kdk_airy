@@ -115,7 +115,10 @@ class KdkHybridClient:
             return
         self._last_discovery = time.monotonic()
         try:
-            found = await async_discover(self._broadcast)
+            found = await async_discover(
+                self._broadcast,
+                expect={d.hashed_guid for d in self._devices or []},
+            )
         except OSError as err:
             LOGGER.debug(f"Local discovery failed: {err}")
             return
@@ -198,14 +201,14 @@ class KdkHybridClient:
         self._all_local = bool(devices) and not cloud
         if not cloud:
             return statuses
-        if not local:
-            # cloud-only this cycle: fail exactly as before local support existed
-            return statuses | await self._cloud.get_statuses(cloud)
         try:
             return statuses | await self._cloud.get_statuses(cloud)
         except (AuthExpired, RefreshTokenExpired):
             raise  # still needs reauth
         except Exception as err:  # noqa: BLE001
+            if not statuses:
+                # nothing answered locally: fail exactly as before local support
+                raise
             # The local fans are fine; don't fail the whole update for the rest.
             LOGGER.warning(f"Cloud fallback failed for {len(cloud)} fan(s): {err}")
             return statuses
@@ -254,7 +257,7 @@ class KdkHybridClient:
             props = settings_to_props(desired_setting)
             try:
                 esv, reply = await self._local.request(ip, ESV_SETC, props)
-            except (TimeoutError, ConnectionError, OSError) as err:
+            except OSError as err:  # includes TimeoutError and ConnectionError
                 LOGGER.warning(
                     f"{device.name} didn't answer locally ({err}), using the cloud"
                 )
