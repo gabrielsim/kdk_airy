@@ -12,12 +12,11 @@ import asyncio
 import time
 
 from .api import (
-    AuthExpired,
     CommandInvalid,
+    InvalidAuth,
     KdkApiClient,
     KdkDevice,
     KdkDeviceSettings,
-    RefreshTokenExpired,
 )
 from .const import LOGGER
 from .local import (
@@ -56,11 +55,17 @@ class KdkHybridClient:
         self._last_discovery = 0.0
         self._discovery_task: asyncio.Task | None = None
         self._all_local = False
+        self._cloud_auth_failed = False
 
     @property
     def all_local(self) -> bool:
         "Whether the last poll reached every fan on the LAN."
         return self._all_local
+
+    @property
+    def cloud_auth_failed(self) -> bool:
+        "Whether the last poll's cloud fallback had its credentials rejected."
+        return self._cloud_auth_failed
 
     async def async_start(self, broadcast_addrs: list[str]) -> None:
         "Bind the local socket and find the fans. Falls back to cloud-only on failure."
@@ -170,6 +175,7 @@ class KdkHybridClient:
         self, devices: list[KdkDevice]
     ) -> dict[str, KdkDeviceSettings]:
         "Get every device's state, locally where possible, as {appliance_id: settings}."
+        self._cloud_auth_failed = False
         if self._local is None:
             return await self._cloud.get_statuses(devices) if devices else {}
 
@@ -203,12 +209,13 @@ class KdkHybridClient:
             return statuses
         try:
             return statuses | await self._cloud.get_statuses(cloud)
-        except (AuthExpired, RefreshTokenExpired):
-            raise  # still needs reauth
         except Exception as err:  # noqa: BLE001
             if not statuses:
                 # nothing answered locally: fail exactly as before local support
                 raise
+            # A changed password shouldn't take the local fans down with the
+            # cloud ones; the coordinator asks for reauth and keeps polling.
+            self._cloud_auth_failed = isinstance(err, InvalidAuth)
             # The local fans are fine; don't fail the whole update for the rest.
             LOGGER.warning(f"Cloud fallback failed for {len(cloud)} fan(s): {err}")
             return statuses

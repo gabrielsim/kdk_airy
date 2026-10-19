@@ -5,6 +5,7 @@ import base64
 import contextlib
 import hashlib
 import html
+import math
 import re
 import secrets
 from dataclasses import dataclass
@@ -163,7 +164,8 @@ class KdkDeviceSettings:
         melody = "FE0140"
         fan_power = {True: "800130", False: "800131"}.get(self.fan_power, None)
         if self.fan_power:
-            fan_volume = f"F0013{format(int(self.fan_volume/10), 'X')}"
+            speed = min(10, max(1, math.ceil(self.fan_volume / 10)))
+            fan_volume = f"F0013{speed:X}"
             fan_direction = {"forward": "F10141", "reverse": "F10142"}[
                 self.fan_direction
             ]
@@ -353,9 +355,10 @@ class KdkApiClient:
             allow_redirects=False,
         )
 
-        oauth_state = (
-            request_1.headers.get("location").split("login?state=")[1].split("&")[0]
-        )
+        location = request_1.headers.get("location") or ""
+        if "login?state=" not in location:
+            raise KdkApiError(f"Unexpected authorize response ({request_1.status})")
+        oauth_state = location.split("login?state=")[1].split("&")[0]
 
         request_2 = await self._session.request(
             method="POST",
@@ -375,7 +378,19 @@ class KdkApiClient:
                 "connection": "PanasonicID-Authentication",
             },
         )
-        request_2_form = __extract_form_values(await request_2.text())
+        request_2_body = await request_2.text()
+        if request_2.status >= 400:
+            # Auth0 answers rejected credentials with 401/403, or a JSON error
+            # naming the reason
+            if request_2.status in (401, 403) or any(
+                code in request_2_body
+                for code in ("invalid_user_password", "access_denied")
+            ):
+                raise InvalidAuth("Username or password was rejected")
+            raise KdkApiError(f"Login failed ({request_2.status})")
+        request_2_form = __extract_form_values(request_2_body)
+        if not request_2_form["wresult"] or not request_2_form["wctx"]:
+            raise KdkApiError("Unexpected login response")
 
         request_3 = await self._session.request(
             method="POST",
@@ -394,8 +409,10 @@ class KdkApiClient:
             allow_redirects=False,
         )
 
-        code = request_4.headers.get("location").split("code=")[1].split("&")[0]
-        oauth_state = request_4.headers.get("location").split("state=")[1]
+        location = request_4.headers.get("location") or ""
+        if "code=" not in location:
+            raise KdkApiError(f"Unexpected login callback ({request_4.status})")
+        code = location.split("code=")[1].split("&")[0]
 
         request_5 = await self._session.request(
             method="POST",
@@ -410,7 +427,9 @@ class KdkApiClient:
             allow_redirects=False,
         )
 
-        token_data = await request_5.json()
+        token_data = await request_5.json(content_type=None)
+        if not isinstance(token_data, dict) or "access_token" not in token_data:
+            raise KdkApiError(f"Token exchange failed ({request_5.status})")
 
         # Store both access and refresh tokens
         self._token_info = TokenInfo(
@@ -440,41 +459,31 @@ class KdkApiClient:
 
         await self.login()
 
-        headers = self.get_auth_headers()
-        if "headers" in kwargs:
-            headers.update(kwargs["headers"])
-        kwargs["headers"] = headers
-
+        extra_headers = kwargs.pop("headers", {})
         start_time = asyncio.get_event_loop().time()
 
-        async with self._session.request(method, url, **kwargs) as response:
+        async with self._session.request(
+            method, url, headers=self.get_auth_headers() | extra_headers, **kwargs
+        ) as response:
             await self._log_response_time(response, start_time)
 
             if response.status == 401:
-                # Token might be expired, try to refresh and retry once
-                LOGGER.warning("Received 401, attempting token refresh")
-                try:
-                    await self.login(force_new_login=True)
-                    # Update headers with new token
-                    headers = self.get_auth_headers()
-                    if "headers" in kwargs:
-                        headers.update(kwargs["headers"])
-                    kwargs["headers"] = headers
+                # The token was revoked early (e.g. another login): log in
+                # again and retry once. Login errors propagate as they are, so
+                # a network blip isn't mistaken for bad credentials.
+                LOGGER.warning("Received 401, logging in again")
+                await self.login(force_new_login=True)
 
-                    # Retry the request
-                    async with self._session.request(
-                        method, url, **kwargs
-                    ) as retry_response:
-                        if retry_response.status == 401:
-                            raise AuthExpired(
-                                "Authentication failed after token refresh"
-                            )
-                        retry_response.raise_for_status()
-                        return await retry_response.json()
-
-                except Exception as e:
-                    LOGGER.error(f"Token refresh and retry failed: {e}")
-                    raise AuthExpired(f"Authentication failed: {e}")
+                async with self._session.request(
+                    method,
+                    url,
+                    headers=self.get_auth_headers() | extra_headers,
+                    **kwargs,
+                ) as retry_response:
+                    if retry_response.status == 401:
+                        raise AuthExpired("Authentication failed after a new login")
+                    retry_response.raise_for_status()
+                    return await retry_response.json()
 
             response.raise_for_status()
             return await response.json()
@@ -497,7 +506,7 @@ class KdkApiClient:
         "Get the current state of the devices and returns in the format { appliance_id: KdkDeviceSettings}."
 
         if not devices:
-            return []
+            return {}
 
         sent_commands = {}
 

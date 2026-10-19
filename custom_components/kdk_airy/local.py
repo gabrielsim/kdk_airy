@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import math
 import re
 import struct
 
@@ -131,7 +132,7 @@ def settings_to_props(settings) -> Props:
     elif settings.fan_power:
         props.append((0x80, b"\x30"))
         if settings.fan_volume is not None:
-            speed = min(10, max(1, int(settings.fan_volume / 10)))
+            speed = min(10, max(1, math.ceil(settings.fan_volume / 10)))
             props.append((0xF0, bytes([0x30 + speed])))
         if settings.fan_direction is not None:
             props.append(
