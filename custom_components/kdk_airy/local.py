@@ -31,6 +31,13 @@ ESV_GET_RES = 0x72
 ESV_SETC_SNA = 0x51
 ESV_GET_SNA = 0x52
 
+# The only answers a request can get. Anything else on 3610 with a matching TID,
+# e.g. a property-change INF (0x73), isn't the reply.
+REPLY_ESVS = {
+    ESV_SETC: (ESV_SET_RES, ESV_SETC_SNA),
+    ESV_GET: (ESV_GET_RES, ESV_GET_SNA),
+}
+
 # What's worth polling: power, speed, direction, fluctuation, and the light
 # block on models that have one. Timers and error codes never change and cost
 # ~15 ms each per poll.
@@ -160,8 +167,8 @@ class LocalTransport(asyncio.DatagramProtocol):
 
     A fan replies *from* an ephemeral port *to* port 3610, not to the sender's
     port, so this must be bound to 3610 - and only one process per host can be.
-    Requests are matched to replies by TID, which also lets any number of them
-    be in flight at once.
+    Requests are matched to replies by TID, source address and ESV, which also
+    lets any number of them be in flight at once.
     """
 
     # Resend after this long without a reply. Covers measured packet loss
@@ -172,7 +179,8 @@ class LocalTransport(asyncio.DatagramProtocol):
     def __init__(self) -> None:
         """Initialise; use LocalTransport.create() to bind."""
         self._transport: asyncio.DatagramTransport | None = None
-        self._pending: dict[int, asyncio.Future] = {}
+        # tid -> (fan ip, reply ESVs accepted, future)
+        self._pending: dict[int, tuple[str, tuple[int, ...], asyncio.Future]] = {}
         self._tid = 0
 
     @classmethod
@@ -195,8 +203,13 @@ class LocalTransport(asyncio.DatagramProtocol):
             tid, esv, props = parse_frame(data)
         except ValueError:
             return
-        future = self._pending.get(tid)
-        if future is not None and not future.done():
+        pending = self._pending.get(tid)
+        if pending is None:
+            return
+        ip, reply_esvs, future = pending
+        if addr[0] != ip or esv not in reply_esvs:
+            return
+        if not future.done():
             future.set_result((esv, props))
 
     def error_received(self, exc: Exception) -> None:
@@ -206,7 +219,7 @@ class LocalTransport(asyncio.DatagramProtocol):
     def connection_lost(self, exc: Exception | None) -> None:
         """Fail anything still waiting."""
         self._transport = None
-        for future in self._pending.values():
+        for _, _, future in self._pending.values():
             if not future.done():
                 future.set_exception(ConnectionError("local transport closed"))
 
@@ -233,7 +246,7 @@ class LocalTransport(asyncio.DatagramProtocol):
         loop = asyncio.get_running_loop()
         tid = self._next_tid()
         future = loop.create_future()
-        self._pending[tid] = future
+        self._pending[tid] = (ip, REPLY_ESVS[esv], future)
         frame = build_frame(tid, esv, props)
         deadline = loop.time() + timeout
         try:

@@ -80,8 +80,13 @@ class KdkHybridClient:
                 "adapter is enabled in Home Assistant's network settings"
             )
             return
-        # Known devices let the first search report how many fans it found.
-        await self.get_registered_fans()
+        # Known devices let the first search report how many fans it found. A
+        # failure here is left to the coordinator's own fetch, which turns it
+        # into a setup retry or reauth.
+        try:
+            await self.get_registered_fans()
+        except Exception as err:  # noqa: BLE001
+            LOGGER.debug(f"Device list not fetched before discovery: {err}")
         await self._async_discover()
 
     async def async_stop(self) -> None:
@@ -116,10 +121,17 @@ class KdkHybridClient:
             return
 
         for guid, ip in found.items():
+            # After a DHCP swap another fan may still be mapped to this address;
+            # it would get this fan's replies and commands.
+            for other in [g for g, i in self._ips.items() if i == ip and g != guid]:
+                del self._ips[other]
+                self._misses.pop(other, None)
             if self._ips.get(guid) != ip:
                 LOGGER.debug(f"Fan {guid[:12]} found at {ip}")
-            self._ips[guid] = ip
-            self._misses.pop(guid, None)
+                self._ips[guid] = ip
+                # Only a new address clears the misses: a fan that answers the
+                # search but not status reads must still reach MAX_MISSES.
+                self._misses.pop(guid, None)
 
         if self._devices is not None:
             local = sum(1 for d in self._devices if d.hashed_guid in self._ips)

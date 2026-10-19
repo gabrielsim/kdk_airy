@@ -43,8 +43,8 @@ async def async_setup_entry(
     # Not network.async_get_ipv4_broadcast_addresses(): by default that returns
     # only 255.255.255.255, which the fans don't answer.
     adapters = await network.async_get_adapters(hass)
-    await client.async_start(subnet_broadcast_addresses(adapters))
     try:
+        await client.async_start(subnet_broadcast_addresses(adapters))
         entry.runtime_data = KdkData(
             client=client,
             coordinator=coordinator,
