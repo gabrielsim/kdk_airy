@@ -280,7 +280,9 @@ class _DiscoveryProtocol(asyncio.DatagramProtocol):
             if match := _SSDP_HEADER.match(line):
                 headers[match.group(1).upper()] = match.group(2).strip()
         if guid := headers.get("HASHGUID"):
-            self.found[guid] = headers.get("LOCATION") or addr[0]
+            # The address that answered, not the self-reported LOCATION: replies
+            # are only accepted from the address requests are sent to.
+            self.found[guid] = addr[0]
 
     def error_received(self, exc: Exception) -> None:
         # e.g. 255.255.255.255 is unroutable on some hosts; other targets still work
