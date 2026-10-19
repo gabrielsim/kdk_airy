@@ -19,8 +19,9 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity, callback
 from homeassistant.util.percentage import int_states_in_range
 import voluptuous as vol
 
-from .api import KdkApiClient, KdkDeviceSettings
-from .combined import combined_settings
+from .api import KdkDevice, KdkDeviceSettings
+from .client import KdkHybridClient
+from .combined import apply_settings, combined_settings
 from .const import LOGGER, MAX_KELVIN, MIN_KELVIN
 from .coordinator import KdkAiryDataUpdateCoordinator
 from .data import KdkConfigEntry
@@ -58,7 +59,7 @@ async def async_setup_entry(
             ),
             appliance_id=device.appliance_id,
             api=entry.runtime_data.client,
-            has_lights=device.has_lights,
+            device=device,
         )
         for device in (await entry.runtime_data.client.get_registered_fans())
     )
@@ -79,8 +80,8 @@ class IntegrationBlueprintFan(CoordinatorEntity, FanEntity, RestoreEntity):
         coordinator: KdkAiryDataUpdateCoordinator,
         entity_description: FanEntityDescription,
         appliance_id: str,
-        api: KdkApiClient,
-        has_lights: bool = False,
+        api: KdkHybridClient,
+        device: KdkDevice,
     ) -> None:
         """Initialize the fan."""
         super().__init__(coordinator=coordinator)
@@ -98,7 +99,7 @@ class IntegrationBlueprintFan(CoordinatorEntity, FanEntity, RestoreEntity):
         self._attr_current_direction: Direction = "forward"
         self._appliance_id = appliance_id
         self._api = api
-        self._has_lights = has_lights
+        self._device = device
         self._attr_unique_id = f"{appliance_id}_fan"
         self._last_change = datetime(1970, 1, 1)
         self._last_known_speed: int = 100  # default fallback speed
@@ -237,10 +238,12 @@ class IntegrationBlueprintFan(CoordinatorEntity, FanEntity, RestoreEntity):
     async def async_set_fan_and_light(self, **kwargs: Any) -> None:
         """Set the fan and its light in a single command."""
 
+        current = self.coordinator.data.get(self._appliance_id)
         try:
             settings = combined_settings(
-                self.coordinator.data.get(self._appliance_id),
-                self._has_lights,
+                current,
+                # read now: an untested model's light is detected after setup
+                self._api.has_lights(self._device),
                 fallback_fan_volume=self._last_known_speed,
                 **kwargs,
             )
@@ -249,6 +252,12 @@ class IntegrationBlueprintFan(CoordinatorEntity, FanEntity, RestoreEntity):
 
         LOGGER.info(f"Set fan and light settings: {settings}")
 
+        previous = (
+            self._attr_is_on,
+            self._attr_percentage,
+            self._attr_current_direction,
+            self._last_known_speed,
+        )
         if settings.fan_power is not None:
             self._attr_is_on = settings.fan_power
             self._attr_percentage = settings.fan_volume if settings.fan_power else 0
@@ -259,9 +268,29 @@ class IntegrationBlueprintFan(CoordinatorEntity, FanEntity, RestoreEntity):
             self._last_change = datetime.now()
             self.async_write_ha_state()
 
-        await self._api.change_settings(
-            appliance_id=self._appliance_id,
-            desired_setting=settings,
+        try:
+            await self._api.change_settings(
+                appliance_id=self._appliance_id,
+                desired_setting=settings,
+            )
+        except Exception:
+            # the fan didn't change: don't keep showing that it did
+            (
+                self._attr_is_on,
+                self._attr_percentage,
+                self._attr_current_direction,
+                self._last_known_speed,
+            ) = previous
+            self.async_write_ha_state()
+            raise
+
+        # Show the change on the fan and the light at once, rather than at the
+        # next poll, then confirm it with a fresh one.
+        self.coordinator.async_set_updated_data(
+            self.coordinator.data
+            | {
+                self._appliance_id: apply_settings(current, settings),
+                "polled_time": datetime.now().timestamp(),
+            }
         )
-        # the light entity picks up its new state from a fresh poll
         await self.coordinator.async_request_refresh()

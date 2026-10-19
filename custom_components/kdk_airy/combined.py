@@ -7,6 +7,7 @@ conventions match the fan and light entities: percentages round up to the next
 
 from __future__ import annotations
 
+import dataclasses
 import math
 
 from .api import KdkDeviceSettings
@@ -26,7 +27,7 @@ def _round_up_to_step(percentage: int) -> int:
 
 def combined_settings(
     current: KdkDeviceSettings | None,
-    has_lights: bool,
+    has_lights: bool | None,
     fan_percentage: int | None = None,
     fan_direction: str | None = None,
     light_brightness_pct: int | None = None,
@@ -42,7 +43,9 @@ def combined_settings(
     on at its last setting, which the fan remembers and reports while off: the
     last speed and direction, and the light's last mode - normal at its last
     brightness and colour, or night light at its last level. An explicit level
-    wins over *_on true. Raises ValueError for requests the fan can't carry out.
+    wins over *_on true. has_lights is None while an untested model's light
+    hasn't been detected yet. Raises ValueError for requests the fan can't carry
+    out.
     """
     touches_fan = (
         fan_on is not None or fan_percentage is not None or fan_direction is not None
@@ -54,6 +57,11 @@ def combined_settings(
     )
     if not touches_fan and not touches_light:
         raise ValueError("Give at least one fan or light setting")
+    if touches_light and has_lights is None:
+        raise ValueError(
+            "This fan hasn't reported yet whether it has a light; try again once "
+            "it has answered a status update"
+        )
     if touches_light and not has_lights:
         raise ValueError("This fan has no light")
     if fan_on is False and (fan_percentage or fan_direction is not None):
@@ -112,12 +120,14 @@ def combined_settings(
                     else kelvin_to_colour(DEFAULT_KELVIN)
                 )
         else:
-            brightness = light_brightness_pct
-            if brightness is None:  # colour only: keep the current day brightness
-                brightness = (current and current.light_brightness) or 100
-            brightness = _round_up_to_step(brightness)
             settings.light_power = True
-            if brightness in NIGHT_LIGHT_LEVELS:
+            if light_brightness_pct is None:
+                # Colour only: normal light at its current brightness, as is. A
+                # low remembered brightness is a normal one, not a night level.
+                brightness = (current and current.light_brightness) or 100
+            else:
+                brightness = _round_up_to_step(light_brightness_pct)
+            if light_brightness_pct is not None and brightness in NIGHT_LIGHT_LEVELS:
                 if light_color_temp_kelvin is not None:
                     raise ValueError(
                         "Night light (10/20/30% brightness) has no colour "
@@ -136,3 +146,20 @@ def combined_settings(
                     settings.light_colour = kelvin_to_colour(DEFAULT_KELVIN)
 
     return settings
+
+
+def apply_settings(
+    current: KdkDeviceSettings | None, sent: KdkDeviceSettings
+) -> KdkDeviceSettings:
+    """The fan's state after it accepted `sent`, for showing it before the next poll.
+
+    Everything `sent` sets replaces the current value; anything it leaves out
+    (a speed while turning off, the day brightness while in night light) is
+    what the fan still remembers.
+    """
+    changes = {
+        field.name: value
+        for field in dataclasses.fields(sent)
+        if field.name != "has_light" and (value := getattr(sent, field.name)) is not None
+    }
+    return dataclasses.replace(current or KdkDeviceSettings(), **changes)
