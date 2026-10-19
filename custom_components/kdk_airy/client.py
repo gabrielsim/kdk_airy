@@ -59,11 +59,18 @@ class KdkHybridClient:
         self._cloud_auth_failed = False
         self._command_locks: dict[str, asyncio.Lock] = {}
         self._command_seq: dict[tuple[str, bool, bool], int] = {}
+        self._lights: dict[str, bool] = {}  # appliance_id -> light seen, for new models
 
     @property
     def all_local(self) -> bool:
         "Whether the last poll reached every fan on the LAN."
         return self._all_local
+
+    def has_lights(self, device: KdkDevice) -> bool | None:
+        "Whether a fan has a light: known for tested models, else read from its replies."
+        if device.has_lights is not None:
+            return device.has_lights
+        return self._lights.get(device.appliance_id)
 
     @property
     def cloud_auth_failed(self) -> bool:
@@ -178,6 +185,38 @@ class KdkHybridClient:
         self, devices: list[KdkDevice]
     ) -> dict[str, KdkDeviceSettings]:
         "Get every device's state, locally where possible, as {appliance_id: settings}."
+        devices = [d._replace(has_lights=self.has_lights(d)) for d in devices]
+        statuses = await self._async_get_statuses(devices)
+        self._detect_lights(devices, statuses)
+        return statuses
+
+    def _detect_lights(
+        self, devices: list[KdkDevice], statuses: dict[str, KdkDeviceSettings]
+    ) -> None:
+        """Settle whether an untested model has a light, from its first reply.
+
+        A fan without one answers the light properties empty (locally) or has
+        the cloud refuse the read; either way it's asked for its fan only from
+        then on.
+        """
+        for device in devices:
+            if device.has_lights is not None:
+                continue
+            if (settings := statuses.get(device.appliance_id)) is not None:
+                found = settings.light_power is not None
+            elif device.appliance_id in self._cloud.refused:
+                found = False
+            else:
+                continue  # unanswered: ask again next poll
+            self._lights[device.appliance_id] = found
+            LOGGER.info(
+                f"{device.name} ({device.product_code}) "
+                f"{'has' if found else 'has no'} light"
+            )
+
+    async def _async_get_statuses(
+        self, devices: list[KdkDevice]
+    ) -> dict[str, KdkDeviceSettings]:
         self._cloud_auth_failed = False
         if self._local is None:
             return await self._cloud.get_statuses(devices) if devices else {}
@@ -236,7 +275,7 @@ class KdkHybridClient:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + STATUS_TIMEOUT
         ip = self._ips[device.hashed_guid]
-        wanted = status_props(device.has_lights)
+        wanted = status_props(device.has_lights is not False)
         while True:
             esv, props = await self._local.request(
                 ip, ESV_GET, wanted, timeout=max(0.1, deadline - loop.time())

@@ -70,6 +70,18 @@ class TokenInfo:
         return self.is_expired and self.refresh_token is not None
 
 
+# Models known to have a light (True) or not (False). Any other model is still
+# added; whether it has a light is read from its first status reply.
+KNOWN_MODELS: dict[str, bool] = {
+    "E48HP": False,
+    "E48GP": True,
+    "H56GP": True,
+    "48INCH-LED": True,
+    "F40GP": True,
+    "K12UC": True,
+}
+
+
 class KdkDevice(NamedTuple):
     "Represents a KDK device."
 
@@ -79,11 +91,21 @@ class KdkDevice(NamedTuple):
     com_id: str
     product_code: str
     name: str
+    has_lights: bool | None = None  # None: not known yet
 
-    @property
-    def has_lights(self):
-        "Whether the fan device also has lights."
-        return self.product_code in ["E48GP", "H56GP", "48INCH-LED", "F40GP", "K12UC"]
+    @classmethod
+    def from_api(cls, data: dict) -> "KdkDevice":
+        "Build a device from an entry of the cloud's device list."
+        product_code = data.get("product_code") or ""
+        return cls(
+            appliance_id=data["appliance_id"],
+            hashed_guid=data.get("hashed_guid") or "",
+            serial_number=data.get("serial_number") or "",
+            com_id=data.get("com_id") or "",
+            product_code=product_code,
+            name=data.get("name") or f"KDK {product_code or 'fan'}",
+            has_lights=KNOWN_MODELS.get(product_code),
+        )
 
 
 @dataclass
@@ -225,15 +247,6 @@ class KdkDeviceSettings:
 class KdkApiClient:
     "KDK API client."
 
-    SUPPORTED_PRODUCT_CODES = [
-        "E48HP",
-        "E48GP",
-        "H56GP",
-        "48INCH-LED",
-        "F40GP",
-        "K12UC",
-    ]
-
     # Hard-coded values from the KDK Ceiling Fan app v1.1.0
     APP_KEY = "rZLwuRtU0nFb20Mh6LShL6uY3fZ5tBlarz4ONmdl"
     USER_AGENT = "CeilingFanKDK_prod_appStore/1.1.0 (iPhone; iOS 16.4.1; Scale/3.00)"
@@ -252,6 +265,8 @@ class KdkApiClient:
         self._session = session
 
         self._token_info: TokenInfo | None = None
+        # appliance_ids whose last status read was refused rather than unanswered
+        self.refused: set[str] = set()
 
         LOGGER.info("KDK API client initiated")
 
@@ -488,45 +503,68 @@ class KdkApiClient:
             response.raise_for_status()
             return await response.json()
 
-    async def get_registered_fans(self):
-        """Return a list of registered fans (includes offline) to the account,`
-        filtered by supported product codes."""
+    async def get_registered_fans(self) -> list[KdkDevice]:
+        """Return every fan registered to the account, offline ones included."""
         data = await self._make_request(
             "GET", "https://prod.mycfan.pgtls.net/v1/mycfan/user/devices"
         )
-        return [
-            KdkDevice(**device)
-            for device in data["devices"]
-            if device.get("product_code") in KdkApiClient.SUPPORTED_PRODUCT_CODES
-        ]
+        devices = []
+        for entry in data.get("devices") or []:
+            try:
+                device = KdkDevice.from_api(entry)
+            except (KeyError, TypeError, AttributeError) as err:
+                LOGGER.warning(f"Skipping a device without an appliance ID: {err!r}")
+                continue
+            if device.product_code not in KNOWN_MODELS:
+                LOGGER.warning(
+                    f"{device.name} is a {device.product_code or 'unnamed'} model, "
+                    "which hasn't been tested with this integration. Adding it "
+                    "anyway; please report whether it works"
+                )
+            devices.append(device)
+        return devices
 
     async def get_statuses(
         self, devices: list[KdkDevice]
     ) -> dict[str, KdkDeviceSettings]:
         "Get the current state of the devices and returns in the format { appliance_id: KdkDeviceSettings}."
 
+        self.refused = set()
         if not devices:
             return {}
 
         sent_commands = {}
+        send_error: Exception | None = None
 
         for device in devices:
+            # A model not known to lack a light is asked for the light too
             get_status_packet = (
                 "0F00800000F00000860000880000F80000F20000F10000F90000FA0000FB0000F30000F50000F40000F70000F600"
-                if device.has_lights
+                if device.has_lights is not False
                 else "0A00800000F00000860000880000F80000F20000F10000F90000FA0000FB00"
             )
 
-            command_request_id = await self.send_command(
-                method="GET",
-                packet=get_status_packet,
-                appliance_id=device.appliance_id,
-            )
+            try:
+                command_request_id = await self.send_command(
+                    method="GET",
+                    packet=get_status_packet,
+                    appliance_id=device.appliance_id,
+                )
+            except (AuthExpired, InvalidAuth):
+                raise
+            except Exception as err:  # noqa: BLE001
+                # one fan the cloud won't take a command for shouldn't fail the rest
+                LOGGER.warning(f"Failed to request status for {device.name}: {err}")
+                send_error = err
+                continue
             sent_commands[device.appliance_id] = command_request_id
 
             LOGGER.debug(
                 f"Command sent, waiting for command results {command_request_id}"
             )
+
+        if not sent_commands and send_error is not None:
+            raise send_error
 
         command_results = await self.get_command_results(
             command_request_ids=list(sent_commands.values())
@@ -543,7 +581,9 @@ class KdkApiClient:
             if not appliance_id:
                 continue
 
-            if isinstance(result, Exception):
+            if isinstance(result, CommandInvalid):
+                self.refused.add(appliance_id)
+            if isinstance(result, Exception) or not result.get("packet"):
                 appliance_name = next(
                     x.name for x in devices if x.appliance_id == appliance_id
                 )

@@ -46,23 +46,34 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the light platform."""
+    client = entry.runtime_data.client
+    coordinator = entry.runtime_data.coordinator
+    devices = await client.get_registered_fans()
+    added: set[str] = set()
 
-    async_add_entities(
-        IntegrationBlueprintLight(
-            coordinator=entry.runtime_data.coordinator,
-            entity_description=LightEntityDescription(
-                key=f"{device.appliance_id}_light",
-                name=device.name,
-                icon="mdi:ceiling-fan-light",
-            ),
-            appliance_id=device.appliance_id,
-            api=entry.runtime_data.client,
+    @callback
+    def _add_lights() -> None:
+        # An untested model gets its light once a status reply shows one
+        new = [
+            d for d in devices if d.appliance_id not in added and client.has_lights(d)
+        ]
+        added.update(d.appliance_id for d in new)
+        async_add_entities(
+            IntegrationBlueprintLight(
+                coordinator=coordinator,
+                entity_description=LightEntityDescription(
+                    key=f"{device.appliance_id}_light",
+                    name=device.name,
+                    icon="mdi:ceiling-fan-light",
+                ),
+                appliance_id=device.appliance_id,
+                api=client,
+            )
+            for device in new
         )
-        for device in filter(
-            lambda x: x.has_lights,
-            (await entry.runtime_data.client.get_registered_fans()),
-        )
-    )
+
+    _add_lights()
+    entry.async_on_unload(coordinator.async_add_listener(_add_lights))
 
 
 class IntegrationBlueprintLight(CoordinatorEntity, LightEntity):
