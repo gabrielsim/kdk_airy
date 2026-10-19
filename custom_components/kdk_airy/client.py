@@ -80,8 +80,13 @@ class KdkHybridClient:
                 "adapter is enabled in Home Assistant's network settings"
             )
             return
-        # Known devices let the first search report how many fans it found.
-        await self.get_registered_fans()
+        # Known devices let the first search report how many fans it found. A
+        # failure here is left to the coordinator's own fetch, which turns it
+        # into a setup retry or reauth.
+        try:
+            await self.get_registered_fans()
+        except Exception as err:  # noqa: BLE001
+            LOGGER.debug(f"Device list not fetched before discovery: {err}")
         await self._async_discover()
 
     async def async_stop(self) -> None:
@@ -110,16 +115,26 @@ class KdkHybridClient:
             return
         self._last_discovery = time.monotonic()
         try:
-            found = await async_discover(self._broadcast)
+            found = await async_discover(
+                self._broadcast,
+                expect={d.hashed_guid for d in self._devices or []},
+            )
         except OSError as err:
             LOGGER.debug(f"Local discovery failed: {err}")
             return
 
         for guid, ip in found.items():
+            # After a DHCP swap another fan may still be mapped to this address;
+            # it would get this fan's replies and commands.
+            for other in [g for g, i in self._ips.items() if i == ip and g != guid]:
+                del self._ips[other]
+                self._misses.pop(other, None)
             if self._ips.get(guid) != ip:
                 LOGGER.debug(f"Fan {guid[:12]} found at {ip}")
-            self._ips[guid] = ip
-            self._misses.pop(guid, None)
+                self._ips[guid] = ip
+                # Only a new address clears the misses: a fan that answers the
+                # search but not status reads must still reach MAX_MISSES.
+                self._misses.pop(guid, None)
 
         if self._devices is not None:
             local = sum(1 for d in self._devices if d.hashed_guid in self._ips)
@@ -186,14 +201,14 @@ class KdkHybridClient:
         self._all_local = bool(devices) and not cloud
         if not cloud:
             return statuses
-        if not local:
-            # cloud-only this cycle: fail exactly as before local support existed
-            return statuses | await self._cloud.get_statuses(cloud)
         try:
             return statuses | await self._cloud.get_statuses(cloud)
         except (AuthExpired, RefreshTokenExpired):
             raise  # still needs reauth
         except Exception as err:  # noqa: BLE001
+            if not statuses:
+                # nothing answered locally: fail exactly as before local support
+                raise
             # The local fans are fine; don't fail the whole update for the rest.
             LOGGER.warning(f"Cloud fallback failed for {len(cloud)} fan(s): {err}")
             return statuses
@@ -242,7 +257,7 @@ class KdkHybridClient:
             props = settings_to_props(desired_setting)
             try:
                 esv, reply = await self._local.request(ip, ESV_SETC, props)
-            except (TimeoutError, ConnectionError, OSError) as err:
+            except OSError as err:  # includes TimeoutError and ConnectionError
                 LOGGER.warning(
                     f"{device.name} didn't answer locally ({err}), using the cloud"
                 )
