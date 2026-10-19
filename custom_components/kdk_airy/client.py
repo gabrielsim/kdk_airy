@@ -38,7 +38,8 @@ REDISCOVER_AFTER_FAILURE = 10  # a local request just went unanswered
 REDISCOVER_PERIODIC = 600
 MAX_MISSES = 3  # consecutive unanswered polls before a fan is treated as moved
 STATUS_TIMEOUT = 3.0  # how long one fan's status read may take, busy spells included
-BUSY_RETRY = 0.3  # wait between reads while a fan is still busy with a command
+COMMAND_TIMEOUT = 3.0  # how long one fan's command may take, busy spells included
+BUSY_RETRY = 0.3  # wait between requests while a fan is still busy with a command
 
 
 class KdkHybridClient:
@@ -56,6 +57,8 @@ class KdkHybridClient:
         self._discovery_task: asyncio.Task | None = None
         self._all_local = False
         self._cloud_auth_failed = False
+        self._command_locks: dict[str, asyncio.Lock] = {}
+        self._command_seq: dict[tuple[str, bool, bool], int] = {}
 
     @property
     def all_local(self) -> bool:
@@ -255,6 +258,26 @@ class KdkHybridClient:
         self, appliance_id: str, desired_setting: KdkDeviceSettings
     ) -> None:
         "Apply settings, locally if the fan is reachable, else through the cloud."
+        # Settings are absolute, so a command still waiting when a newer one for
+        # the same part (fan or light) arrives is dropped: dragging a slider
+        # sends where it stopped, not every step on the way.
+        key = (
+            appliance_id,
+            desired_setting.fan_power is not None,
+            desired_setting.light_power is not None,
+        )
+        seq = self._command_seq[key] = self._command_seq.get(key, 0) + 1
+        # One command per fan at a time: a fan refuses commands while it's busy
+        # with the last one, and a retried older command mustn't land last.
+        async with self._command_locks.setdefault(appliance_id, asyncio.Lock()):
+            if self._command_seq[key] != seq:
+                LOGGER.debug(f"Dropped a command superseded by a newer one: {key}")
+                return
+            await self._async_change_settings(appliance_id, desired_setting)
+
+    async def _async_change_settings(
+        self, appliance_id: str, desired_setting: KdkDeviceSettings
+    ) -> None:
         device = next(
             (d for d in self._devices or [] if d.appliance_id == appliance_id), None
         )
@@ -263,7 +286,7 @@ class KdkHybridClient:
         if self._local is not None and ip is not None:
             props = settings_to_props(desired_setting)
             try:
-                esv, reply = await self._local.request(ip, ESV_SETC, props)
+                esv, reply = await self._async_local_set(device, ip, props)
             except OSError as err:  # includes TimeoutError and ConnectionError
                 LOGGER.warning(
                     f"{device.name} didn't answer locally ({err}), using the cloud"
@@ -276,6 +299,11 @@ class KdkHybridClient:
                 # SetC_SNA isn't all-or-nothing: the accepted properties have
                 # already applied. Retrying via the cloud would be refused too.
                 refused = [f"{epc:02X}" for epc, edt in reply if edt]
+                if len(refused) == len(props):
+                    raise CommandInvalid(
+                        f"{device.name} stayed busy for {COMMAND_TIMEOUT:.0f}s and "
+                        f"refused the command (ESV {esv:02X})"
+                    )
                 raise CommandInvalid(
                     f"{device.name} refused {', '.join(refused) or 'the command'} "
                     f"(ESV {esv:02X})"
@@ -284,3 +312,27 @@ class KdkHybridClient:
         await self._cloud.change_settings(
             appliance_id=appliance_id, desired_setting=desired_setting
         )
+
+    async def _async_local_set(
+        self, device: KdkDevice, ip: str, props: list
+    ) -> tuple[int, list]:
+        """Send a SetC, waiting out a busy spell.
+
+        Just after accepting a command, a fan refuses the next one outright:
+        SetC_SNA with every property echoed back as refused, the command
+        counterpart of the empty Get_SNA in _async_local_status. Seen when
+        changing speed in quick succession. So send again until it's accepted;
+        a refusal of only some properties is a genuine one and is returned.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + COMMAND_TIMEOUT
+        while True:
+            esv, reply = await self._local.request(
+                ip, ESV_SETC, props, timeout=max(0.1, deadline - loop.time())
+            )
+            refused = sum(1 for _, edt in reply if edt)
+            busy = esv != ESV_SET_RES and refused == len(props)
+            if not busy or loop.time() + BUSY_RETRY >= deadline:
+                return esv, reply
+            LOGGER.debug(f"{device.name} busy, sending the command again")
+            await asyncio.sleep(BUSY_RETRY)
