@@ -38,7 +38,6 @@ async def async_setup_entry(
         )
     )
     coordinator = KdkAiryDataUpdateCoordinator(hass=hass, api=client)
-    await client.login()
 
     # Not network.async_get_ipv4_broadcast_addresses(): by default that returns
     # only 255.255.255.255, which the fans don't answer.
@@ -50,14 +49,15 @@ async def async_setup_entry(
             coordinator=coordinator,
             integration=async_get_loaded_integration(hass, entry.domain),
         )
+        # Logs in and fetches the fans. A cloud failure becomes
+        # ConfigEntryNotReady (retried) and a rejected password a reauth.
         await coordinator.async_config_entry_first_refresh()
     except Exception:
-        # HA retries a failed setup; UDP 3610 must be free for that retry
+        # UDP 3610 must be free for the retry
         await client.async_stop()
         raise
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
     return True
 
@@ -72,12 +72,3 @@ async def async_unload_entry(
         # a reload sets up a new client, which needs UDP 3610 released
         await entry.runtime_data.client.async_stop()
     return unloaded
-
-
-async def async_reload_entry(
-    hass: HomeAssistant,
-    entry: KdkConfigEntry,
-) -> None:
-    """Reload config entry."""
-    await async_unload_entry(hass, entry)
-    await async_setup_entry(hass, entry)
