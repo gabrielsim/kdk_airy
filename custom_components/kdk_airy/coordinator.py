@@ -9,7 +9,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import AuthExpired, KdkApiClient, KdkDevice, RefreshTokenExpired
+from .api import AuthExpired, KdkDevice, RefreshTokenExpired
+from .client import KdkHybridClient
 from .const import DOMAIN, LOGGER
 
 
@@ -19,7 +20,7 @@ class KdkAiryDataUpdateCoordinator(DataUpdateCoordinator):
     def __init__(
         self,
         hass: HomeAssistant,
-        api: KdkApiClient,
+        api: KdkHybridClient,
     ) -> None:
         """Initialize."""
         super().__init__(
@@ -41,6 +42,9 @@ class KdkAiryDataUpdateCoordinator(DataUpdateCoordinator):
             start_time = datetime.now().timestamp()
             LOGGER.debug(f"Polling for updates from {len(self._devices)} fans")
             statuses = await self._api.get_statuses(devices=self._devices)
+            # a local poll costs ~200 ms with no cloud load; poll faster when
+            # every fan answered on the LAN
+            self.update_interval = timedelta(seconds=5 if self._api.all_local else 15)
             return statuses | {"polled_time": start_time}
         except (AuthExpired, RefreshTokenExpired) as exception:
             LOGGER.warning(f"Authentication failed: {exception}")

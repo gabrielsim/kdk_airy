@@ -137,21 +137,23 @@ class IntegrationBlueprintLight(CoordinatorEntity, LightEntity):
             return
 
         self._attr_is_on = device_settings.light_power
+        # A partial reply can leave any of these unset; keep the last known value
         if device_settings.light_mode == "day":
-            self._attr_brightness = value_to_brightness(
-                (1, 100), device_settings.light_brightness
-            )
-            self._attr_color_temp_kelvin = int(
-                MIN_KELVIN
-                + device_settings.light_colour * ((MAX_KELVIN - MIN_KELVIN) / 100)
-            )
+            if device_settings.light_brightness is not None:
+                self._attr_brightness = value_to_brightness(
+                    (1, 100), device_settings.light_brightness
+                )
+            if device_settings.light_colour is not None:
+                self._attr_color_temp_kelvin = int(
+                    MIN_KELVIN
+                    + device_settings.light_colour * ((MAX_KELVIN - MIN_KELVIN) / 100)
+                )
         elif device_settings.light_mode == "night":
-            self._attr_brightness = value_to_brightness(
-                (1, 100),
-                {"low": 10, "medium": 20, "high": 30}[
-                    device_settings.light_night_light_brightness
-                ],
+            night_pct = {"low": 10, "medium": 20, "high": 30}.get(
+                device_settings.light_night_light_brightness
             )
+            if night_pct is not None:
+                self._attr_brightness = value_to_brightness((1, 100), night_pct)
         self.async_write_ha_state()
 
     async def async_set_light_settings(self, settings: KdkDeviceSettings) -> None:

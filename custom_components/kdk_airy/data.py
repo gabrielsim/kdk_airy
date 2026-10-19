@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.loader import Integration
 
-from .api import KdkApiClient
+from .client import KdkHybridClient
 from .coordinator import KdkAiryDataUpdateCoordinator
 
 type KdkConfigEntry = ConfigEntry[KdkData]
@@ -17,6 +17,6 @@ type KdkConfigEntry = ConfigEntry[KdkData]
 class KdkData:
     """Data for the KDK Airy integration."""
 
-    client: KdkApiClient
+    client: KdkHybridClient
     coordinator: KdkAiryDataUpdateCoordinator
     integration: Integration
