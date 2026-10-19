@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import AuthExpired, KdkDevice, RefreshTokenExpired
+from .api import InvalidAuth, KdkDevice
 from .client import KdkHybridClient
 from .const import DOMAIN, LOGGER
 
@@ -34,7 +33,13 @@ class KdkAiryDataUpdateCoordinator(DataUpdateCoordinator):
 
     async def _async_setup(self):
         "Save the list of registered fans to be polled."
-        self._devices = await self._api.get_registered_fans()
+        try:
+            self._devices = await self._api.get_registered_fans()
+        except InvalidAuth as exception:
+            raise ConfigEntryAuthFailed(exception) from exception
+        except Exception as exception:
+            # retried by HA as ConfigEntryNotReady
+            raise UpdateFailed(exception) from exception
 
     async def _async_update_data(self):
         """Update data via library."""
@@ -45,8 +50,11 @@ class KdkAiryDataUpdateCoordinator(DataUpdateCoordinator):
             # a local poll costs ~200 ms with no cloud load; poll faster when
             # every fan answered on the LAN
             self.update_interval = timedelta(seconds=5 if self._api.all_local else 15)
+            if self._api.cloud_auth_failed and self.config_entry:
+                # the local fans still answered, so keep polling them
+                self.config_entry.async_start_reauth(self.hass)
             return statuses | {"polled_time": start_time}
-        except (AuthExpired, RefreshTokenExpired) as exception:
+        except InvalidAuth as exception:
             LOGGER.warning(f"Authentication failed: {exception}")
             raise ConfigEntryAuthFailed(exception) from exception
         except Exception as exception:

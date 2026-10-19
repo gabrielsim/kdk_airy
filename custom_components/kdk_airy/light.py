@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util.color import (
+    brightness_to_value,
     value_to_brightness,
 )
 
@@ -28,29 +29,51 @@ DEFAULT_KELVIN = 6000  # Cloudy
 MAX_BRIGHTNESS = 255
 
 
+def _to_device_pct(brightness: int) -> int:
+    """Round an HA brightness up to the fan's 10% steps.
+
+    Rounds to a whole percent first: a level read from the fan comes back
+    slightly above it (50% -> 128 -> 50.2%), and rounding that straight up
+    would raise the light a step every time it's turned on.
+    """
+    pct = round(brightness_to_value((1, 100), brightness))
+    return max(10, min(100, math.ceil(pct / 10) * 10))
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: KdkConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the light platform."""
+    client = entry.runtime_data.client
+    coordinator = entry.runtime_data.coordinator
+    devices = await client.get_registered_fans()
+    added: set[str] = set()
 
-    async_add_entities(
-        IntegrationBlueprintLight(
-            coordinator=entry.runtime_data.coordinator,
-            entity_description=LightEntityDescription(
-                key=f"{device.appliance_id}_light",
-                name=device.name,
-                icon="mdi:ceiling-fan-light",
-            ),
-            appliance_id=device.appliance_id,
-            api=entry.runtime_data.client,
+    @callback
+    def _add_lights() -> None:
+        # An untested model gets its light once a status reply shows one
+        new = [
+            d for d in devices if d.appliance_id not in added and client.has_lights(d)
+        ]
+        added.update(d.appliance_id for d in new)
+        async_add_entities(
+            IntegrationBlueprintLight(
+                coordinator=coordinator,
+                entity_description=LightEntityDescription(
+                    key=f"{device.appliance_id}_light",
+                    name=device.name,
+                    icon="mdi:ceiling-fan-light",
+                ),
+                appliance_id=device.appliance_id,
+                api=client,
+            )
+            for device in new
         )
-        for device in filter(
-            lambda x: x.has_lights,
-            (await entry.runtime_data.client.get_registered_fans()),
-        )
-    )
+
+    _add_lights()
+    entry.async_on_unload(coordinator.async_add_listener(_add_lights))
 
 
 class IntegrationBlueprintLight(CoordinatorEntity, LightEntity):
@@ -98,11 +121,8 @@ class IntegrationBlueprintLight(CoordinatorEntity, LightEntity):
 
     @property
     def brightness_pct(self):
-        """Return the brightness percentage of the light."""
-        return max(
-            0,
-            min(100, math.ceil(self._attr_brightness / MAX_BRIGHTNESS * 10) * 10),
-        )
+        """Return the brightness percentage of the light, in steps of 10."""
+        return _to_device_pct(self._attr_brightness)
 
     @property
     def color_percentage(self):
@@ -172,9 +192,9 @@ class IntegrationBlueprintLight(CoordinatorEntity, LightEntity):
         """Turn the light on."""
         self._attr_is_on = True
         if ATTR_BRIGHTNESS in kwargs:
-            self._attr_brightness = math.ceil(
-                kwargs[ATTR_BRIGHTNESS] / (MAX_BRIGHTNESS / 10)
-            ) * (MAX_BRIGHTNESS / 10)
+            self._attr_brightness = value_to_brightness(
+                (1, 100), _to_device_pct(kwargs[ATTR_BRIGHTNESS])
+            )
         if ATTR_COLOR_TEMP_KELVIN in kwargs:
             self._attr_color_temp_kelvin = kwargs[ATTR_COLOR_TEMP_KELVIN]
         self.async_write_ha_state()

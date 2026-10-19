@@ -1,3 +1,4 @@
 {
-    "name": "KDK Airy"
-  }
+  "name": "KDK Airy",
+  "homeassistant": "2024.8.0"
+}
