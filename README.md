@@ -54,7 +54,7 @@ The KDK account is still used to find your fans and their names, and as a fallba
 
 Requirements for local control:
 - Home Assistant must be on the same subnet as the fans. It finds them with a UDP broadcast on port 50125; they don't advertise over mDNS.
-- Home Assistant needs host networking (Home Assistant OS and Supervised have it; for Docker, use `--network host`).
+- Home Assistant needs host networking (Home Assistant OS and Supervised have it; for Docker, use `--network host`). Docker on macOS (OrbStack, Docker Desktop) can't provide this, so the integration runs cloud-only there; see [#15](https://github.com/gabrielsim/kdk_airy/issues/15) for a community workaround.
 - UDP port 3610 must be free on the Home Assistant host. If another integration (e.g. ECHONET Lite) is using it, a warning is logged and the integration runs cloud-only.
 
 ## Supported features
